@@ -692,15 +692,61 @@ function formatHttpError(status: number, body: string): string {
   return `Ollama HTTP ${status}${snippet ? `: ${snippet}` : ""}`;
 }
 
+function normalizeModelKey(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/:latest$/i, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Map a preferred model id to an installed Ollama name.
+ * Falls back to fuzzy match, then first installed model (never invent names).
+ */
 export function resolveModelName(
   preferred: string,
   available: string[],
 ): string {
-  if (available.some((m) => m === preferred || m.startsWith(`${preferred}:`))) {
-    const exact = available.find((m) => m === preferred);
+  const pref = (preferred ?? "").trim();
+  if (available.length === 0) return pref;
+
+  if (pref) {
+    const exact = available.find((m) => m === pref);
     if (exact) return exact;
-    const tagged = available.find((m) => m.startsWith(`${preferred}:`));
+    const tagged = available.find(
+      (m) => m === `${pref}:latest` || m.startsWith(`${pref}:`),
+    );
     if (tagged) return tagged;
+    // strip :tag from preferred
+    const base = pref.replace(/:.*$/, "");
+    const byBase = available.find(
+      (m) => m === base || m.startsWith(`${base}:`) || m.replace(/:.*$/, "") === base,
+    );
+    if (byBase) return byBase;
+
+    const key = normalizeModelKey(pref);
+    if (key.length >= 4) {
+      const fuzzy = available.find((m) => {
+        const mk = normalizeModelKey(m);
+        return mk === key || mk.includes(key) || key.includes(mk);
+      });
+      if (fuzzy) return fuzzy;
+    }
   }
-  return preferred;
+
+  // Stale session / default pointing at deleted GGUF name → use first installed
+  return available[0]!;
+}
+
+/** True if preferred resolves to something Ollama actually lists. */
+export function isModelAvailable(
+  preferred: string,
+  available: string[],
+): boolean {
+  if (available.length === 0) return false;
+  const resolved = resolveModelName(preferred, available);
+  return available.some(
+    (m) => m === resolved || m.startsWith(`${resolved}:`) || resolved.startsWith(m),
+  );
 }

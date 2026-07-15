@@ -4,7 +4,7 @@
  */
 import { invokeTauri, isTauri } from "../engine/platform";
 
-export type StoreName = "sessions" | "memory" | "settings";
+export type StoreName = "sessions" | "memory" | "settings" | "characters";
 
 export interface StorageFileInfo {
   name: string;

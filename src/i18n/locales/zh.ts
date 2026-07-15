@@ -3,6 +3,14 @@ export type Dict = {
   appTagline: string;
   sessions: string;
   newSession: string;
+  newFolder: string;
+  renameFolder: string;
+  deleteFolder: string;
+  confirmDeleteFolder: string;
+  moveToFolder: string;
+  unfiledChats: string;
+  noFoldersYet: string;
+  folderDropHint: string;
   noSessions: string;
   rename: string;
   delete: string;
@@ -115,11 +123,6 @@ export type Dict = {
   showThinkingHint: string;
   thinkingLabel: string;
   thinkingStreaming: string;
-  replyStyle: string;
-  replyStyleHint: string;
-  replyStyleBalanced: string;
-  replyStyleWork: string;
-  replyStyleCompanion: string;
   answerLength: string;
   answerLengthHint: string;
   answerLengthConcise: string;
@@ -168,8 +171,6 @@ export type Dict = {
   modelImportPath: string;
   modelImportName: string;
   modelImportNameHint: string;
-  modelImportSystem: string;
-  modelImportSystemHint: string;
   modelImportRun: string;
   modelImportWorking: string;
   modelImportSuccess: string;
@@ -189,6 +190,84 @@ export type Dict = {
   modelPreAskCancel: string;
   modelPreAskNoSwitch: string;
   modelPreAskSwitch: string;
+  /** Onboarding P0 */
+  onboardWelcome: string;
+  onboardStep1Title: string;
+  onboardStep1Body: string;
+  onboardStep2Title: string;
+  onboardStep2Body: string;
+  onboardStep3Title: string;
+  onboardStep3Body: string;
+  onboardNext: string;
+  onboardBack: string;
+  onboardSkip: string;
+  onboardFinish: string;
+  onboardNeedEngine: string;
+  onboardNeedModel: string;
+  onboardModelsReady: string;
+  onboardModelsEmpty: string;
+  onboardDataHint: string;
+  onboardDataLoading: string;
+  emptyChatOffline: string;
+  emptyChatNoModel: string;
+  memoryCompressedHint: string;
+  characterLibrary: string;
+  characterNew: string;
+  characterEdit: string;
+  characterSave: string;
+  characterName: string;
+  characterNamePh: string;
+  characterTagline: string;
+  characterTaglinePh: string;
+  characterDesc: string;
+  characterDescPh: string;
+  characterSystem: string;
+  characterSystemPh: string;
+  characterDefault: string;
+  characterSetDefault: string;
+  characterSetDefaultShort: string;
+  characterSwitch: string;
+  characterInSession: string;
+  characterSessionHint: string;
+  characterSessionHintShort: string;
+  characterReplyAs: string;
+  confirmDeleteCharacter: string;
+  you: string;
+  characterHubTitle: string;
+  characterHubIntro: string;
+  characterOpenHub: string;
+  characterLibraryCount: string;
+  characterNoDesc: string;
+  characterYourCards: string;
+  characterUseInSession: string;
+  characterExport: string;
+  characterExportAll: string;
+  characterImport: string;
+  characterImportOk: string;
+  characterImportErrJson: string;
+  characterImportErrEmpty: string;
+  characterImportFailed: string;
+  characterPresetsTitle: string;
+  characterPresetsSoon: string;
+  characterCreatedToast: string;
+  characterSavedToast: string;
+  characterDeletedToast: string;
+  characterSwitchedToast: string;
+  characterMeta: string;
+  characterMetaGhostHint: string;
+  characterAvatar: string;
+  characterAvatarHint: string;
+  characterAvatarUpload: string;
+  characterAvatarReplace: string;
+  characterAvatarClear: string;
+  characterAvatarWorking: string;
+  characterAvatarOk: string;
+  characterAvatarErrType: string;
+  characterAvatarErrSize: string;
+  characterAvatarErrLoad: string;
+  characterAvatarFailed: string;
+  memoryScopeMeta: string;
+  memoryScopePersona: string;
 };
 
 export const zh: Dict = {
@@ -196,6 +275,15 @@ export const zh: Dict = {
   appTagline: "本地私密助手",
   sessions: "会话",
   newSession: "新建会话",
+  newFolder: "新建文件夹",
+  renameFolder: "重命名文件夹",
+  deleteFolder: "删除文件夹",
+  confirmDeleteFolder:
+    "删除该文件夹？其中的会话会回到未分类列表（不会删除会话）。",
+  moveToFolder: "移动到文件夹",
+  unfiledChats: "未分类",
+  noFoldersYet: "还没有文件夹，请先「新建文件夹」。",
+  folderDropHint: "拖入会话，或右键会话选择移动到此",
   noSessions: "暂无会话",
   rename: "重命名",
   delete: "删除",
@@ -221,7 +309,7 @@ export const zh: Dict = {
   ollamaOffline: "未连接",
   ollamaUnknown: "检测中…",
   ollamaOfflineHint:
-    "本地引擎未就绪。请使用顶部「启动引擎」或「安装引导」；日常无需打开 Ollama 界面。",
+    "本地引擎未就绪。请点「启动引擎」；若未安装，用「安装引导」。日常不必打开 Ollama 界面。若本机开了代理，请把 127.0.0.1 设为直连。",
   defaultSessionTitle: "新对话",
   confirmDeleteSession: "删除该会话？此操作不可撤销。",
   untitled: "未命名",
@@ -320,11 +408,6 @@ export const zh: Dict = {
     "思考型模型会单独展示推理过程（折叠块）；关闭后只显示最终回答。",
   thinkingLabel: "思考过程",
   thinkingStreaming: "思考中…",
-  replyStyle: "回复风格",
-  replyStyleHint: "影响语气与结构，不改变记忆策略。",
-  replyStyleBalanced: "均衡",
-  replyStyleWork: "工作助手",
-  replyStyleCompanion: "陪伴者",
   answerLength: "回答篇幅",
   answerLengthHint:
     "精简：短答、省 token。正常：更完整（默认；可缓解「比 Ollama 更短」）。",
@@ -378,8 +461,6 @@ export const zh: Dict = {
   modelImportPath: "文件路径",
   modelImportName: "导入后的名称",
   modelImportNameHint: "仅字母数字、点、下划线、短横线；可选 :tag，如 my-gemma:q5",
-  modelImportSystem: "系统提示（可选）",
-  modelImportSystemHint: "写入该模型的默认 system；可留空。",
   modelImportRun: "开始导入",
   modelImportWorking: "正在导入（大文件可能需几分钟）…",
   modelImportSuccess: "已导入 {m}，可在顶部列表中选择。",
@@ -400,4 +481,93 @@ export const zh: Dict = {
   modelPreAskCancel: "取消",
   modelPreAskNoSwitch: "开始，不切换",
   modelPreAskSwitch: "开始，并切换",
+  onboardWelcome: "本地私密助手 · 三步即可开始",
+  onboardStep1Title: "① 启动本地引擎",
+  onboardStep1Body:
+    "Liora 用本机 Ollama 跑模型。安装一次即可；日常只需打开 Liora。请先让引擎显示「就绪」。",
+  onboardStep2Title: "② 准备模型",
+  onboardStep2Body:
+    "没有模型就无法对话。可下载推荐模型，或导入本机 .gguf 文件。",
+  onboardStep3Title: "③ 数据放在本机",
+  onboardStep3Body:
+    "记忆与会话保存在你电脑上的文件夹，不会上传。可之后在设置里改路径。",
+  onboardNext: "下一步",
+  onboardBack: "上一步",
+  onboardSkip: "跳过引导",
+  onboardFinish: "开始使用",
+  onboardNeedEngine: "请先启动引擎",
+  onboardNeedModel: "请先获取至少一个模型",
+  onboardModelsReady: "已检测到 {n} 个模型",
+  onboardModelsEmpty: "尚未安装模型，请打开「获取模型」。",
+  onboardDataHint: "默认目录在本机应用数据下；可用下面按钮打开或稍后修改。",
+  onboardDataLoading: "正在读取路径…",
+  emptyChatOffline:
+    "本地引擎未就绪。请先「启动引擎」，再选择模型开始对话。长聊时会自动压缩早期内容。",
+  emptyChatNoModel:
+    "引擎已就绪，但还没有模型。点顶部「获取模型」下载或导入 GGUF。",
+  memoryCompressedHint: "已压缩冷区对话 · 热区保留最近原文",
+  characterLibrary: "角色库",
+  characterNew: "新建角色",
+  characterEdit: "编辑角色",
+  characterSave: "保存",
+  characterName: "名称",
+  characterNamePh: "例如：小助手、旅行向导…",
+  characterTagline: "一句话简介",
+  characterTaglinePh: "可选，显示在卡片上",
+  characterDesc: "角色描述",
+  characterDescPh: "性格、口吻、背景等（卡片展示 + 无系统指令时作人设）",
+  characterSystem: "系统指令 / 人设（可选）",
+  characterSystemPh:
+    "写入模型的完整角色设定。填写后优先于上方描述；内容由你决定，Liora 不额外加限制。",
+  characterDefault: "默认",
+  characterSetDefault: "设为新建会话的默认角色",
+  characterSetDefaultShort: "默认",
+  characterSwitch: "切换到本会话",
+  characterInSession: "本会话",
+  characterSessionHint:
+    "角色绑定当前会话；切换只影响本会话后续回复。每条助手消息会标注当时角色。",
+  characterSessionHintShort:
+    "切换 / 新建 / 导入在「角色库」；本栏展示当前会话角色。",
+  characterReplyAs: "回复角色",
+  confirmDeleteCharacter: "删除角色「{name}」？使用该角色的会话会回退到默认角色。",
+  you: "你",
+  characterHubTitle: "角色库",
+  characterHubIntro:
+    "管理本机角色卡：切换本会话角色、设默认、导入导出。后续会提供可选默认角色包。",
+  characterOpenHub: "打开角色库",
+  characterLibraryCount: "共 {n} 张角色卡",
+  characterNoDesc: "暂无描述 — 可在角色库中编辑。",
+  characterYourCards: "你的角色",
+  characterUseInSession: "用于本会话",
+  characterExport: "导出",
+  characterExportAll: "导出全部",
+  characterImport: "导入 JSON",
+  characterImportOk: "已导入 {n} 个角色",
+  characterImportErrJson: "无法解析角色文件，请使用 Liora 导出的 JSON。",
+  characterImportErrEmpty: "文件中没有有效角色。",
+  characterImportFailed: "导入失败",
+  characterPresetsTitle: "推荐角色包",
+  characterPresetsSoon: "即将推出可选默认角色（工作向、陪伴向等），一键加入角色库。",
+  characterCreatedToast: "角色已创建并用于本会话",
+  characterSavedToast: "角色已保存",
+  characterDeletedToast: "角色已删除",
+  characterSwitchedToast: "本会话已切换为「{name}」",
+  characterMeta: "本机 AI",
+  characterMetaGhostHint: "虚影 · 主档管家",
+  characterAvatar: "角色立绘（3:4）",
+  characterAvatarHint:
+    "支持 JPG / PNG / WebP。将自动裁成 3:4 半身框（约 768×1024），可覆盖推荐包与自定义角色。",
+  characterAvatarUpload: "上传图片",
+  characterAvatarReplace: "更换图片",
+  characterAvatarClear: "清除立绘",
+  characterAvatarWorking: "处理中…",
+  characterAvatarOk: "立绘已更新（已裁成 3:4）",
+  characterAvatarErrType: "请选择图片文件（JPG / PNG / WebP / GIF）。",
+  characterAvatarErrSize: "图片过大（最大约 12MB），请压缩后再试。",
+  characterAvatarErrLoad: "无法读取该图片，请换一张再试。",
+  characterAvatarFailed: "立绘处理失败",
+  memoryScopeMeta:
+    "当前为 Meta（本机 AI）：列表与注入仅显示「用户主档」记忆。角色私有记忆不会出现在这里。",
+  memoryScopePersona:
+    "当前角色「{name}」：仅显示该角色专属记忆。用户主档只在 Meta（Liora）下管理与注入。",
 };

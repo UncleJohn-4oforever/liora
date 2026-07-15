@@ -14,13 +14,12 @@
 
 `localStorage` key `liora.memory.v1` (browser profile).
 
-## Injection & auto-job UX (B)
+## Injection & auto-job UX (B) → **R3 scoped** (see [MEMORY_SCOPE.md](./MEMORY_SCOPE.md))
 
-- **L3 profile always injected** across sessions (not only keyword match)
-- **L4 procedures always on** when present
-- L5: recent + query-related
-- Cross-session episodes scored by token/entity overlap with profile
-- Chunk retrieval enriched with profile keywords
+- **Meta** (builtin Liora): injects **master** dossier only
+- **Persona**: injects that character’s atoms / episodes / chunks only
+- L3/L4 always-on **within scope**; L5 recent + query-related within scope
+- Cross-session episodes only if same `characterId`
 - Toast shows `L3×n · L4×n · L5×n` after auto/force extract
 - Settings: **summaryEveryN** (2–30) controls auto interval
 

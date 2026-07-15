@@ -1,4 +1,6 @@
+import { DEFAULT_CHARACTER } from "../../data/defaults";
 import type { MemoryStoreData } from "../../types/memory";
+import { migrateMemoryStoreScopes } from "../memory/scope";
 import { kvGetJson, kvSetJson } from "./kv";
 
 const KEY = "memory" as const;
@@ -10,12 +12,13 @@ const empty = (): MemoryStoreData => ({
   chunks: [],
   cursors: [],
   recentUpdates: [],
+  scopeMigrated: true,
 });
 
 export async function loadMemoryStoreFromDb(): Promise<MemoryStoreData> {
   const data = await kvGetJson<MemoryStoreData>(KEY);
   if (!data || data.version !== 1) return empty();
-  return {
+  const base = {
     ...empty(),
     ...data,
     memories: data.memories ?? [],
@@ -24,6 +27,16 @@ export async function loadMemoryStoreFromDb(): Promise<MemoryStoreData> {
     cursors: data.cursors ?? [],
     recentUpdates: data.recentUpdates ?? [],
   };
+  const migrated = migrateMemoryStoreScopes(base, DEFAULT_CHARACTER.id);
+  if (!data.scopeMigrated) {
+    // Persist migration so flags stick
+    try {
+      await kvSetJson(KEY, migrated);
+    } catch {
+      /* ignore */
+    }
+  }
+  return migrated;
 }
 
 export async function replaceMemoryStore(data: MemoryStoreData): Promise<void> {

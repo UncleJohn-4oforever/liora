@@ -1,4 +1,9 @@
-import type { AnswerLength, ContextSize, Locale, ReplyStyle } from "../types";
+import type {
+  AnswerLength,
+  CharacterCard,
+  ContextSize,
+  Locale,
+} from "../types";
 
 export const CONTEXT_SIZE_OPTIONS: ContextSize[] = [4096, 8192, 16384];
 
@@ -8,34 +13,52 @@ export function normalizeContextSize(v: unknown): ContextSize {
   return 8192;
 }
 
-/** Build the base system prompt from locale + reply style + answer length. */
+export interface CharacterPromptInput {
+  name: string;
+  /** Prefer systemPrompt; fall back to description */
+  persona?: string;
+}
+
+export function characterToPromptInput(
+  card: CharacterCard | null | undefined,
+  locale: Locale,
+): CharacterPromptInput | undefined {
+  if (!card) return undefined;
+  const name =
+    locale === "en"
+      ? card.nameEn || card.name
+      : card.name || card.nameEn;
+  const persona =
+    (card.systemPrompt ?? "").trim() ||
+    (locale === "en"
+      ? (card.descriptionEn || card.description).trim()
+      : (card.description || card.descriptionEn).trim());
+  return {
+    name: name || "Assistant",
+    persona: persona || undefined,
+  };
+}
+
+/**
+ * Base system prompt: app identity + session character + answer length.
+ * We do not inject moral/roleplay limits — persona is entirely the user's character card
+ * (and the open-weight model they chose). Treat the user as an adult.
+ */
 export function buildSystemPrompt(
   locale: Locale,
-  replyStyle: ReplyStyle = "balanced",
   answerLength: AnswerLength = "normal",
+  character?: CharacterPromptInput,
 ): string {
   const parts: string[] = [];
 
   if (locale === "en") {
-    parts.push("You are Liora, a local private assistant on the user's computer.");
-    switch (replyStyle) {
-      case "work":
-        parts.push(
-          "Reply style: professional work assistant. Be structured, actionable, and business-appropriate.",
-          "Prefer bullet points, clear next steps, and minimal fluff. Do not over-roleplay.",
-        );
-        break;
-      case "companion":
-        parts.push(
-          "Reply style: warm companion. Be friendly, empathetic, and conversational.",
-          "You may use a gentle tone, but do not claim real human emotions or physical presence.",
-        );
-        break;
-      default:
-        parts.push(
-          "Reply style: balanced assistant. Clear, helpful, and natural — not stiff, not overly chatty.",
-          "Do not over-roleplay or claim real emotions.",
-        );
+    parts.push("You are Liora, a local private assistant running on the user's computer.");
+    if (character) {
+      parts.push(`Active character for this chat session: ${character.name}.`);
+      if (character.persona) {
+        parts.push(`Character setting:\n${character.persona}`);
+      }
+      parts.push("Follow the character setting for this session.");
     }
     switch (answerLength) {
       case "concise":
@@ -46,31 +69,19 @@ export function buildSystemPrompt(
       default:
         parts.push(
           "Length: give complete, normal-length answers with enough detail and examples when helpful.",
-          "Do not truncate useful steps. Prefer thoroughness over extreme brevity.",
+          "Prefer finishing useful steps over extreme brevity.",
           "If the user asks for a long explanation, finish it fully instead of stopping mid-way.",
         );
     }
     parts.push("Match the user's language.");
   } else {
     parts.push("你是 Liora，运行在用户本机上的本地私密助手。");
-    switch (replyStyle) {
-      case "work":
-        parts.push(
-          "回复风格：工作助手。专业、有条理、可执行。",
-          "优先要点列表、明确下一步，少空话。不要过度拟人。",
-        );
-        break;
-      case "companion":
-        parts.push(
-          "回复风格：陪伴者。温暖、共情、口语化、像在聊天。",
-          "语气可以亲切，但不要声称拥有真实情感或实体存在。",
-        );
-        break;
-      default:
-        parts.push(
-          "回复风格：均衡助手。清晰、好用、自然，不过分生硬也不过分闲聊。",
-          "不要过度拟人或宣称真实情感。",
-        );
+    if (character) {
+      parts.push(`本会话当前角色：${character.name}。`);
+      if (character.persona) {
+        parts.push(`角色设定：\n${character.persona}`);
+      }
+      parts.push("请按本会话的角色设定回复。");
     }
     switch (answerLength) {
       case "concise":
@@ -81,7 +92,7 @@ export function buildSystemPrompt(
       default:
         parts.push(
           "篇幅：给出完整、正常长度的回答；需要时补充细节、步骤与例子。",
-          "不要为了短而省略关键步骤。优先把事情说清楚。",
+          "优先把事情说清楚，而不是为了短而省略关键步骤。",
           "若用户需要长文解释，请写完整，不要中途截断。",
         );
     }

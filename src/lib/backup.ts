@@ -1,7 +1,9 @@
-import type { AppSettings, Session } from "../types";
+import { ensureBuiltin } from "./characters/repo";
+import type { AppSettings, CharacterCard, Session } from "../types";
 import type { MemoryStoreData } from "../types/memory";
 
 export const BACKUP_FORMAT = "liora-backup" as const;
+/** v1: settings + sessions + memory; optional characters (0.6+) */
 export const BACKUP_VERSION = 1 as const;
 
 export interface LioraBackup {
@@ -12,6 +14,8 @@ export interface LioraBackup {
   settings: AppSettings;
   sessions: Session[];
   memory: MemoryStoreData;
+  /** Role library; optional for backups exported before 0.6 */
+  characters?: CharacterCard[];
 }
 
 export type ImportMode = "replace" | "merge";
@@ -20,6 +24,7 @@ export function buildBackup(input: {
   settings: AppSettings;
   sessions: Session[];
   memory: MemoryStoreData;
+  characters?: CharacterCard[];
 }): LioraBackup {
   return {
     format: BACKUP_FORMAT,
@@ -29,6 +34,7 @@ export function buildBackup(input: {
     settings: input.settings,
     sessions: input.sessions,
     memory: input.memory,
+    characters: ensureBuiltin(input.characters ?? []),
   };
 }
 
@@ -67,6 +73,9 @@ export function parseBackupJson(text: string): LioraBackup {
   }
   if (b.memory.version !== 1) {
     throw new Error("Memory payload version mismatch");
+  }
+  if (b.characters != null && !Array.isArray(b.characters)) {
+    throw new Error("Backup characters must be an array when present");
   }
   return b as LioraBackup;
 }
@@ -114,11 +123,31 @@ function mergeMemory(
   };
 }
 
+function mergeCharacters(
+  local: CharacterCard[],
+  incoming: CharacterCard[] | undefined,
+): CharacterCard[] {
+  if (!incoming?.length) return ensureBuiltin(local);
+  const map = new Map<string, CharacterCard>();
+  for (const c of ensureBuiltin(local)) map.set(c.id, c);
+  for (const c of incoming) {
+    if (!c?.id) continue;
+    const prev = map.get(c.id);
+    const nextUpdated = c.updatedAt ?? 0;
+    const prevUpdated = prev?.updatedAt ?? 0;
+    if (!prev || nextUpdated >= prevUpdated) {
+      map.set(c.id, c);
+    }
+  }
+  return ensureBuiltin([...map.values()]);
+}
+
 export function applyBackup(
   current: {
     settings: AppSettings;
     sessions: Session[];
     memory: MemoryStoreData;
+    characters?: CharacterCard[];
   },
   backup: LioraBackup,
   mode: ImportMode,
@@ -126,7 +155,9 @@ export function applyBackup(
   settings: AppSettings;
   sessions: Session[];
   memory: MemoryStoreData;
+  characters: CharacterCard[];
 } {
+  const localChars = ensureBuiltin(current.characters ?? []);
   if (mode === "replace") {
     return {
       settings: { ...current.settings, ...backup.settings },
@@ -139,12 +170,17 @@ export function applyBackup(
         cursors: backup.memory.cursors ?? [],
         recentUpdates: backup.memory.recentUpdates ?? [],
       },
+      // Old backups without characters: keep local library
+      characters: backup.characters?.length
+        ? ensureBuiltin(backup.characters)
+        : localChars,
     };
   }
   return {
     settings: { ...current.settings, ...backup.settings },
     sessions: mergeSessions(current.sessions, backup.sessions),
     memory: mergeMemory(current.memory, backup.memory),
+    characters: mergeCharacters(localChars, backup.characters),
   };
 }
 

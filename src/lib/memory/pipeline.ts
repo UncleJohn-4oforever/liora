@@ -1,9 +1,10 @@
-import type { Message } from "../../types";
+import type { CharacterCard, Message } from "../../types";
 import type {
   EpisodeSummary,
   MemoryItem,
   MemoryStoreData,
 } from "../../types/memory";
+import { DEFAULT_CHARACTER } from "../../data/defaults";
 import { uid } from "../id";
 import {
   heuristicCandidatesFromTranscript,
@@ -17,6 +18,12 @@ import {
   computeHotStartIndex,
   shouldRunRollingCompress,
 } from "./rolling";
+import {
+  stampChunk,
+  stampEpisode,
+  stampMemoryAtom,
+  writeTargetForCharacter,
+} from "./scope";
 import {
   addChunk,
   addEpisode,
@@ -113,6 +120,7 @@ export function shouldRunSummaryRolling(
 /** Heuristic episode when the model fails — still advances the cold cursor. */
 function heuristicEpisode(
   sessionId: string,
+  characterId: string,
   messages: Message[],
   from: number,
   to: number,
@@ -136,22 +144,25 @@ function heuristicEpisode(
     .filter((p) => p.layer === "L5")
     .map((p) => p.object)
     .slice(0, 4);
-  return {
-    id: uid("ep"),
-    sessionId,
-    level: "micro",
-    fromMsg: from,
-    toMsg: to - 1,
-    topic,
-    whatHappened: userBits.length
-      ? userBits
-      : ["Earlier turns compressed for context budget."],
-    decisions: [],
-    openLoops,
-    entities,
-    rawText: [...userBits, ...entities, ...openLoops].join(" · ").slice(0, 500),
-    createdAt: Date.now(),
-  };
+  return stampEpisode(
+    {
+      id: uid("ep"),
+      sessionId,
+      level: "micro",
+      fromMsg: from,
+      toMsg: to - 1,
+      topic,
+      whatHappened: userBits.length
+        ? userBits
+        : ["Earlier turns compressed for context budget."],
+      decisions: [],
+      openLoops,
+      entities,
+      rawText: [...userBits, ...entities, ...openLoops].join(" · ").slice(0, 500),
+      createdAt: Date.now(),
+    },
+    characterId,
+  );
 }
 
 function tryIngest(
@@ -166,6 +177,7 @@ function tryIngest(
   },
   sessionId: string,
   evidence: string,
+  writeTarget: { scope: "master" | "character"; characterId?: string },
 ): { store: MemoryStoreData; label?: string; layer?: MemoryItem["layer"] } {
   const subject = String(cand.subject ?? "").trim();
   const predicate = String(cand.predicate ?? "").trim();
@@ -175,22 +187,25 @@ function tryIngest(
   const { layer, type } = normalizeLayerAndType(cand);
   const specificity = scoreSpecificity({ subject, predicate, object });
 
-  const item: MemoryItem = {
-    id: uid("mem"),
-    layer,
-    type,
-    subject,
-    predicate,
-    object,
-    confidence: Math.max(0, Math.min(1, Number(cand.confidence ?? 0.7))),
-    specificity,
-    source: "extract",
-    status: "active",
-    sessionId,
-    evidence,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
+  const item = stampMemoryAtom(
+    {
+      id: uid("mem"),
+      layer,
+      type,
+      subject,
+      predicate,
+      object,
+      confidence: Math.max(0, Math.min(1, Number(cand.confidence ?? 0.7))),
+      specificity,
+      source: "extract",
+      status: "active",
+      sessionId,
+      evidence,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    writeTarget,
+  );
 
   if (!layerAwarePasses(item)) return { store };
   // Identity L3: slightly lower bar so name/pet stick
@@ -220,6 +235,8 @@ export async function runMemoryPipeline(options: {
   messages: Message[];
   model: string;
   memoryEnabled: boolean;
+  /** Session character — scopes writes (Meta → master, persona → character). */
+  character?: CharacterCard | null;
   force?: boolean;
   /** Override auto-trigger interval (message count). */
   everyN?: number;
@@ -228,6 +245,9 @@ export async function runMemoryPipeline(options: {
   signal?: AbortSignal;
 }): Promise<PipelineResult> {
   const { sessionId, messages, model, memoryEnabled, force, signal } = options;
+  const character = options.character ?? DEFAULT_CHARACTER;
+  const writeTarget = writeTargetForCharacter(character);
+  const ownerCharacterId = character.id || DEFAULT_CHARACTER.id;
   const everyN = options.everyN ?? SUMMARY_EVERY_N_MESSAGES;
   const numCtx = options.numCtx ?? 8192;
   let store = options.store;
@@ -276,15 +296,21 @@ export async function runMemoryPipeline(options: {
   const evidence = `msgs ${from}-${windowTo - 1}`;
 
   const chunkText = transcript.slice(0, 4000);
-  store = addChunk(store, {
-    id: uid("chk"),
-    sessionId,
-    text: chunkText,
-    terms: termFreq(chunkText),
-    messageFrom: from,
-    messageTo: windowTo - 1,
-    createdAt: Date.now(),
-  });
+  store = addChunk(
+    store,
+    stampChunk(
+      {
+        id: uid("chk"),
+        sessionId,
+        text: chunkText,
+        terms: termFreq(chunkText),
+        messageFrom: from,
+        messageTo: windowTo - 1,
+        createdAt: Date.now(),
+      },
+      ownerCharacterId,
+    ),
+  );
 
   const system = [
     "You compress older chat turns into a SHORT structured summary for long-context chat.",
@@ -343,30 +369,39 @@ export async function runMemoryPipeline(options: {
     (!(ep.topic || (ep.what_happened && ep.what_happened.length)) &&
       !(payload.memories && payload.memories.length))
   ) {
-    episode = heuristicEpisode(sessionId, messages, from, windowTo);
+    episode = heuristicEpisode(
+      sessionId,
+      ownerCharacterId,
+      messages,
+      from,
+      windowTo,
+    );
     updatedLabels.push(episode.topic);
   } else {
-    episode = {
-      id: uid("ep"),
-      sessionId,
-      level: "micro",
-      fromMsg: from,
-      toMsg: windowTo - 1,
-      topic: (ep.topic ?? "conversation").slice(0, 120),
-      whatHappened: (ep.what_happened ?? []).slice(0, 6).map(String),
-      decisions: (ep.decisions ?? []).slice(0, 4).map(String),
-      openLoops: (ep.open_loops ?? []).slice(0, 4).map(String),
-      entities: (ep.entities ?? []).slice(0, 12).map(String),
-      rawText: [
-        ep.topic,
-        ...(ep.what_happened ?? []),
-        ...(ep.open_loops ?? []),
-      ]
-        .filter(Boolean)
-        .join(" · ")
-        .slice(0, 500),
-      createdAt: Date.now(),
-    };
+    episode = stampEpisode(
+      {
+        id: uid("ep"),
+        sessionId,
+        level: "micro",
+        fromMsg: from,
+        toMsg: windowTo - 1,
+        topic: (ep.topic ?? "conversation").slice(0, 120),
+        whatHappened: (ep.what_happened ?? []).slice(0, 6).map(String),
+        decisions: (ep.decisions ?? []).slice(0, 4).map(String),
+        openLoops: (ep.open_loops ?? []).slice(0, 4).map(String),
+        entities: (ep.entities ?? []).slice(0, 12).map(String),
+        rawText: [
+          ep.topic,
+          ...(ep.what_happened ?? []),
+          ...(ep.open_loops ?? []),
+        ]
+          .filter(Boolean)
+          .join(" · ")
+          .slice(0, 500),
+        createdAt: Date.now(),
+      },
+      ownerCharacterId,
+    );
   }
   store = addEpisode(store, episode);
 
@@ -385,6 +420,7 @@ export async function runMemoryPipeline(options: {
       },
       sessionId,
       evidence,
+      writeTarget,
     );
     store = r.store;
     if (r.label) {
@@ -394,7 +430,7 @@ export async function runMemoryPipeline(options: {
   }
 
   for (const cand of payload.memories ?? []) {
-    const r = tryIngest(store, cand, sessionId, evidence);
+    const r = tryIngest(store, cand, sessionId, evidence, writeTarget);
     store = r.store;
     if (r.label) {
       updatedLabels.push(r.label);
@@ -404,7 +440,13 @@ export async function runMemoryPipeline(options: {
 
   // High-precision profile heuristics (names / pets) — R2 reliability
   for (const h of extractProfileFromTranscript(transcript)) {
-    const r = tryIngest(store, h, sessionId, evidence + "|profile");
+    const r = tryIngest(
+      store,
+      h,
+      sessionId,
+      evidence + "|profile",
+      writeTarget,
+    );
     store = r.store;
     if (r.label) {
       updatedLabels.push(r.label);
@@ -429,6 +471,7 @@ export async function runMemoryPipeline(options: {
       },
       sessionId,
       evidence + "|entity",
+      writeTarget,
     );
     store = r.store;
     if (r.label) {
@@ -448,7 +491,13 @@ export async function runMemoryPipeline(options: {
       if (h.layer === "L4" && active.some((m) => m.layer === "L4" && m.object === h.object)) {
         continue;
       }
-      const r = tryIngest(store, h, sessionId, evidence + "|heuristic");
+      const r = tryIngest(
+        store,
+        h,
+        sessionId,
+        evidence + "|heuristic",
+        writeTarget,
+      );
       store = r.store;
       if (r.label) {
         updatedLabels.push(r.label);
@@ -470,6 +519,7 @@ export async function runMemoryPipeline(options: {
       store,
       sessionId,
       model,
+      characterId: ownerCharacterId,
       signal,
     });
     store = meso.store;

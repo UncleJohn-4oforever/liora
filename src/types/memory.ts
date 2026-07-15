@@ -10,6 +10,13 @@ export type MemoryType =
   | "boundary"
   | "episode";
 
+/**
+ * R3 scope:
+ * - master: user dossier — only Meta (本机 AI) injects
+ * - character: private to one character card (no cross-persona bleed)
+ */
+export type MemoryScope = "master" | "character";
+
 export interface MemoryItem {
   id: string;
   layer: MemoryLayer;
@@ -25,6 +32,10 @@ export interface MemoryItem {
   source: "extract" | "user" | "summary";
   status: "active" | "deleted" | "superseded";
   sessionId?: string;
+  /** R3: master | character (defaults applied on migrate) */
+  scope?: MemoryScope;
+  /** Set when scope=character */
+  characterId?: string;
   evidence?: string;
   createdAt: number;
   updatedAt: number;
@@ -33,6 +44,9 @@ export interface MemoryItem {
 export interface EpisodeSummary {
   id: string;
   sessionId: string;
+  /** Owning persona (or Meta id); used for cross-session inject filter */
+  characterId?: string;
+  scope?: MemoryScope;
   level: "micro" | "meso";
   fromMsg: number;
   toMsg: number;
@@ -49,6 +63,8 @@ export interface EpisodeSummary {
 export interface TextChunk {
   id: string;
   sessionId: string;
+  characterId?: string;
+  scope?: MemoryScope;
   text: string;
   /** bag-of-words style sparse features: token -> weight */
   terms: Record<string, number>;
@@ -72,4 +88,6 @@ export interface MemoryStoreData {
   cursors: SessionMemoryCursor[];
   /** Recent toast events for UI */
   recentUpdates: { id: string; label: string; at: number }[];
+  /** R3: one-time scope migration completed */
+  scopeMigrated?: boolean;
 }

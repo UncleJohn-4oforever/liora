@@ -37,7 +37,7 @@ interface Props {
 
 type PendingAction =
   | { kind: "pull"; modelId: string }
-  | { kind: "import"; path: string; name: string; system?: string };
+  | { kind: "import"; path: string; name: string };
 
 export function ModelHub({
   dict,
@@ -58,7 +58,6 @@ export function ModelHub({
 
   const [ggufPath, setGgufPath] = useState("");
   const [importName, setImportName] = useState("");
-  const [importSystem, setImportSystem] = useState("");
   const [importing, setImporting] = useState(false);
 
   /** Ask before starting download/import */
@@ -169,14 +168,12 @@ export function ModelHub({
       kind: "import",
       path: ggufPath.trim(),
       name: importName.trim(),
-      system: importSystem.trim() || undefined,
     });
   };
 
   const runImport = async (
     path: string,
     name: string,
-    system: string | undefined,
     switchTo: boolean,
   ) => {
     setPending(null);
@@ -184,7 +181,8 @@ export function ModelHub({
     setMsg(null);
     setImporting(true);
     try {
-      const result = await importLocalGguf({ path, name, system });
+      // Persona lives in character cards — do not bake SYSTEM into the Ollama model.
+      const result = await importLocalGguf({ path, name });
       if (result.ok) {
         const short = shortModelName(result.name);
         onPulled(result.name, switchTo);
@@ -323,18 +321,6 @@ export function ModelHub({
               onChange={(e) => setImportName(e.target.value)}
             />
 
-            <label className="label" style={{ marginTop: 10 }}>
-              {dict.modelImportSystem}
-            </label>
-            <p className="muted small">{dict.modelImportSystemHint}</p>
-            <textarea
-              className="settings-input model-import-system"
-              rows={3}
-              value={importSystem}
-              disabled={busy || !!pending}
-              onChange={(e) => setImportSystem(e.target.value)}
-            />
-
             <div className="model-card-actions" style={{ marginTop: 12 }}>
               <button
                 type="button"
@@ -432,12 +418,7 @@ export function ModelHub({
           if (pending.kind === "pull") {
             void runPull(pending.modelId, false);
           } else {
-            void runImport(
-              pending.path,
-              pending.name,
-              pending.system,
-              false,
-            );
+            void runImport(pending.path, pending.name, false);
           }
         }}
         onPrimary={() => {
@@ -445,7 +426,7 @@ export function ModelHub({
           if (pending.kind === "pull") {
             void runPull(pending.modelId, true);
           } else {
-            void runImport(pending.path, pending.name, pending.system, true);
+            void runImport(pending.path, pending.name, true);
           }
         }}
       />

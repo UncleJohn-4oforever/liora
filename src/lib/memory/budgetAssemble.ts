@@ -1,8 +1,16 @@
-import type { Locale, Message } from "../../types";
-import type { ContextSize } from "../../types";
+import type {
+  AnswerLength,
+  CharacterCard,
+  ContextSize,
+  Locale,
+  Message,
+} from "../../types";
 import type { MemoryStoreData } from "../../types/memory";
-import { buildSystemPrompt, normalizeContextSize } from "../chatPrompt";
-import type { AnswerLength, ReplyStyle } from "../../types";
+import {
+  buildSystemPrompt,
+  characterToPromptInput,
+  normalizeContextSize,
+} from "../chatPrompt";
 import {
   buildMemorySystemBlock,
   composeSystemPrompt,
@@ -72,11 +80,12 @@ export function assembleChatContext(options: {
   sessionId: string;
   store: MemoryStoreData;
   locale: Locale;
-  replyStyle: ReplyStyle;
   answerLength: AnswerLength;
   memoryEnabled: boolean;
   showThinking: boolean;
   contextSize?: ContextSize;
+  /** Session-bound character (persona + R3 memory scope). */
+  character?: CharacterCard | null;
 }): AssembleResult {
   const numCtx = normalizeContextSize(options.contextSize);
   const reservedGen = options.showThinking
@@ -87,8 +96,8 @@ export function assembleChatContext(options: {
 
   const baseSystem = buildSystemPrompt(
     options.locale,
-    options.replyStyle,
     options.answerLength,
+    characterToPromptInput(options.character ?? undefined, options.locale),
   );
   const s0Budget = Math.floor(available * 0.12);
   const s0Trim = trimToBudget(baseSystem, s0Budget);
@@ -104,6 +113,7 @@ export function assembleChatContext(options: {
       options.sessionId,
       latest,
       options.locale,
+      options.character,
     );
     // Memory + summaries: up to ~40% of available (profile + L2 chain)
     const s1Budget = Math.floor(available * 0.4);

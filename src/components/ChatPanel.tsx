@@ -5,6 +5,7 @@ import {
   formatContextLabel,
   normalizeContextSize,
 } from "../lib/chatPrompt";
+import { emptyChatHint } from "../lib/errors";
 import type { AssembledBudget } from "../lib/memory/budgetAssemble";
 import type { TokenUsage } from "../lib/ollama";
 import type {
@@ -12,18 +13,21 @@ import type {
   AppSettings,
   ContextSize,
   Message,
-  ReplyStyle,
   Session,
 } from "../types";
+import { MarkdownBody } from "./MarkdownBody";
 
 interface Props {
   dict: Dict;
   session: Session | null;
+  /** Display name of the character bound to this session */
+  sessionCharacterName?: string;
   input: string;
   generating: boolean;
   lastError: string | null;
   modelLabel: string;
   ollamaOnline: boolean;
+  modelCount: number;
   memoryEnabled: boolean;
   rememberBusy: boolean;
   settings: AppSettings;
@@ -38,16 +42,20 @@ interface Props {
   onStop: () => void;
   onRememberText: (text: string) => void;
   onChangeSettings: (patch: Partial<AppSettings>) => void;
+  onOpenModelHub?: () => void;
+  onStartEngine?: () => void;
 }
 
 export function ChatPanel({
   dict,
   session,
+  sessionCharacterName,
   input,
   generating,
   lastError,
   modelLabel,
   ollamaOnline,
+  modelCount,
   memoryEnabled,
   rememberBusy,
   settings,
@@ -59,6 +67,8 @@ export function ChatPanel({
   onStop,
   onRememberText,
   onChangeSettings,
+  onOpenModelHub,
+  onStartEngine,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -73,7 +83,6 @@ export function ChatPanel({
     }
   };
 
-  const replyStyle: ReplyStyle = settings.replyStyle ?? "balanced";
   const answerLength: AnswerLength = settings.answerLength ?? "normal";
   const showThinking = settings.showThinking !== false;
   const contextSize: ContextSize = normalizeContextSize(settings.contextSize);
@@ -101,6 +110,14 @@ export function ChatPanel({
       <div className="panel-header chat-header">
         <div className="chat-header-left">
           <h2>{session?.title ?? dict.chat}</h2>
+          {sessionCharacterName && (
+            <span
+              className="model-chip model-chip-char"
+              title={dict.characterSessionHint}
+            >
+              {dict.character}: {sessionCharacterName}
+            </span>
+          )}
           <span className="model-chip" title={modelLabel}>
             {dict.usingModel}: {modelLabel}
           </span>
@@ -193,7 +210,41 @@ export function ChatPanel({
 
       <div className="messages">
         {!session || session.messages.length === 0 ? (
-          <div className="empty-state">{dict.emptyChat}</div>
+          <div className="empty-state">
+            <p>
+              {emptyChatHint({
+                locale: settings.locale,
+                engineOnline: ollamaOnline,
+                modelCount,
+                memoryEnabled,
+              })}
+            </p>
+            <div className="empty-state-actions">
+              {!ollamaOnline && onStartEngine && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={onStartEngine}
+                >
+                  {dict.engineStart}
+                </button>
+              )}
+              {ollamaOnline && modelCount === 0 && onOpenModelHub && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={onOpenModelHub}
+                >
+                  {dict.modelHub}
+                </button>
+              )}
+            </div>
+            {assembledBudget && assembledBudget.coldCount > 0 && (
+              <p className="muted small" style={{ marginTop: 12 }}>
+                {dict.memoryCompressedHint}
+              </p>
+            )}
+          </div>
         ) : (
           session.messages.map((m) => (
             <Bubble
@@ -203,6 +254,7 @@ export function ChatPanel({
               memoryEnabled={memoryEnabled}
               rememberBusy={rememberBusy}
               showThinking={showThinking}
+              fallbackCharacterName={sessionCharacterName}
               isStreaming={
                 generating &&
                 m.role === "assistant" &&
@@ -219,28 +271,6 @@ export function ChatPanel({
 
       <div className="composer">
         <div className="composer-prefs" aria-label={dict.settingsChat}>
-          <div className="pref-group">
-            <span className="pref-label">{dict.replyStyle}</span>
-            <div className="pref-chips">
-              {(
-                [
-                  ["balanced", dict.replyStyleBalanced],
-                  ["work", dict.replyStyleWork],
-                  ["companion", dict.replyStyleCompanion],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`chip ${replyStyle === id ? "chip-on" : ""}`}
-                  disabled={generating}
-                  onClick={() => onChangeSettings({ replyStyle: id })}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="pref-group">
             <span className="pref-label">{dict.answerLength}</span>
             <div className="pref-chips">
@@ -353,6 +383,7 @@ function Bubble({
   memoryEnabled,
   rememberBusy,
   showThinking,
+  fallbackCharacterName,
   isStreaming,
   onRemember,
 }: {
@@ -361,6 +392,7 @@ function Bubble({
   memoryEnabled: boolean;
   rememberBusy: boolean;
   showThinking: boolean;
+  fallbackCharacterName?: string;
   isStreaming: boolean;
   onRemember: () => void;
 }) {
@@ -374,10 +406,20 @@ function Bubble({
     }
   }, [isStreaming, hasThinking, message.content]);
 
+  const charName =
+    message.characterName || fallbackCharacterName || dict.character;
+  const roleLabel = message.role === "user" ? dict.you : charName;
+
   return (
     <div className={`bubble bubble-${message.role}`}>
       <div className="bubble-role-row">
-        <div className="bubble-role">{message.role}</div>
+        <div className="bubble-role">
+          {message.role === "assistant" ? (
+            <span className="bubble-role-name">{roleLabel}</span>
+          ) : (
+            roleLabel
+          )}
+        </div>
         {memoryEnabled && message.role === "user" && message.content.trim() && (
           <button
             type="button"
@@ -410,9 +452,23 @@ function Bubble({
       )}
 
       <div className="bubble-body">
-        {message.content ||
-          (isStreaming && hasThinking ? "" : isStreaming ? "…" : "…")}
+        {message.content.trim() ? (
+          <MarkdownBody content={message.content} />
+        ) : isStreaming && hasThinking ? (
+          ""
+        ) : isStreaming ? (
+          "…"
+        ) : (
+          "…"
+        )}
       </div>
+      {message.role === "assistant" &&
+        message.content.trim() &&
+        !isStreaming && (
+          <div className="bubble-char-footer">
+            {dict.characterReplyAs}：{charName}
+          </div>
+        )}
     </div>
   );
 }

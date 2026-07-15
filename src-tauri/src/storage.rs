@@ -11,7 +11,12 @@ use std::process::Command;
 
 const CONFIG_NAME: &str = "storage-config.json";
 const DATA_SUBDIR: &str = "data";
-const FILES: &[&str] = &["sessions.json", "memory.json", "settings.json"];
+const FILES: &[&str] = &[
+    "sessions.json",
+    "memory.json",
+    "settings.json",
+    "characters.json",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +119,7 @@ fn file_path(name: &str) -> Result<PathBuf, String> {
         "sessions" | "sessions.json" => "sessions.json",
         "memory" | "memory.json" => "memory.json",
         "settings" | "settings.json" => "settings.json",
+        "characters" | "characters.json" => "characters.json",
         _ => return Err(format!("unknown_store: {name}")),
     };
     Ok(resolve_data_dir().join(safe))

@@ -1,4 +1,6 @@
+import type { CharacterCard } from "../../types";
 import type { MemoryItem, MemoryStoreData } from "../../types/memory";
+import { DEFAULT_CHARACTER } from "../../data/defaults";
 import { uid } from "../id";
 import {
   heuristicCandidatesFromTranscript,
@@ -6,6 +8,7 @@ import {
   normalizeLayerAndType,
 } from "./layerRules";
 import { ollamaComplete, parseJsonLoose } from "./ollamaJson";
+import { stampMemoryAtom, writeTargetForCharacter } from "./scope";
 import { mergeMemory } from "./store";
 import { scoreSpecificity } from "./specificity";
 import { detectSensitivity } from "./sensitive";
@@ -33,6 +36,7 @@ function toItem(
   },
   sessionId: string,
   source: MemoryItem["source"],
+  writeTarget: { scope: "master" | "character"; characterId?: string },
 ): MemoryItem | null {
   const subject = String(cand.subject ?? "user").trim();
   const predicate = String(cand.predicate ?? "notes").trim();
@@ -46,22 +50,25 @@ function toItem(
     object,
   });
   const specificity = scoreSpecificity({ subject, predicate, object });
-  const item: MemoryItem = {
-    id: uid("mem"),
-    layer,
-    type,
-    subject,
-    predicate,
-    object,
-    confidence: Math.max(0.5, Math.min(1, Number(cand.confidence ?? 0.9))),
-    specificity: Math.max(specificity, 0.6),
-    source,
-    status: "active",
-    sessionId,
-    evidence: "user_explicit",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
+  const item = stampMemoryAtom(
+    {
+      id: uid("mem"),
+      layer,
+      type,
+      subject,
+      predicate,
+      object,
+      confidence: Math.max(0.5, Math.min(1, Number(cand.confidence ?? 0.9))),
+      specificity: Math.max(specificity, 0.6),
+      source,
+      status: "active",
+      sessionId,
+      evidence: "user_explicit",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    writeTarget,
+  );
   // explicit remember: slightly softer gate
   if (!layerAwarePasses(item) && item.specificity < 0.45 && object.length < 6) {
     return null;
@@ -91,12 +98,16 @@ export async function rememberExplicitText(options: {
   sessionId: string;
   text: string;
   model: string;
+  character?: CharacterCard | null;
   /** If true, skip confirm even when sensitive (user already confirmed). */
   confirmedSensitive?: boolean;
   signal?: AbortSignal;
 }): Promise<RememberResult> {
   const text = options.text.trim();
   if (!text) return { store: options.store, labels: [], error: "empty" };
+  const writeTarget = writeTargetForCharacter(
+    options.character ?? DEFAULT_CHARACTER,
+  );
 
   const sens = detectSensitivity(text);
 
@@ -132,7 +143,7 @@ export async function rememberExplicitText(options: {
       }>;
     }>(raw);
     for (const c of parsed?.memories ?? []) {
-      const item = toItem(c, options.sessionId, "user");
+      const item = toItem(c, options.sessionId, "user", writeTarget);
       if (item) rawItems.push(item);
     }
   } catch {
@@ -140,7 +151,7 @@ export async function rememberExplicitText(options: {
   }
 
   for (const h of heur) {
-    const item = toItem(h, options.sessionId, "user");
+    const item = toItem(h, options.sessionId, "user", writeTarget);
     if (item) rawItems.push(item);
   }
 
@@ -157,6 +168,7 @@ export async function rememberExplicitText(options: {
       },
       options.sessionId,
       "user",
+      writeTarget,
     );
     if (item) rawItems.push(item);
   }

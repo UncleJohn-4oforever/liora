@@ -17,18 +17,22 @@ Top bar → **设置**
   "version": 1,
   "exportedAt": 0,
   "app": "Liora",
-  "settings": { "locale", "defaultModelId", "memoryEnabled" },
+  "settings": { "locale", "defaultModelId", "memoryEnabled", "defaultCharacterId?" },
   "sessions": [ ... ],
-  "memory": { "version": 1, "memories", "episodes", "chunks", "cursors", "recentUpdates" }
+  "memory": { "version": 1, "memories", "episodes", "chunks", "cursors", "recentUpdates" },
+  "characters": [ { "id", "name", "description", "systemPrompt?", "..." } ]
 }
 ```
+
+- `characters`：**0.6+** 导出必含；更早备份可无此字段。
+- 导入时若备份无 `characters`：**保留本地角色库**（不抹掉）。
 
 ## Import modes
 
 | Mode | Behavior |
 |------|----------|
-| **Merge** | Union by id; newer `updatedAt` wins for sessions/memories |
-| **Replace** | Local sessions + memory replaced by backup |
+| **Merge** | Union by id; newer `updatedAt` wins for sessions/memories/characters |
+| **Replace** | Local sessions + memory replaced by backup; characters replaced only if backup includes them |
 
 ## Verify
 

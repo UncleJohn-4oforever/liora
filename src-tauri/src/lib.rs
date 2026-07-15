@@ -50,6 +50,11 @@ struct StartResult {
 }
 
 static DETECT_CACHE: Mutex<Option<OllamaDetect>> = Mutex::new(None);
+
+/// True when Liora spawned headless `ollama serve` and should stop it on exit.
+/// If Ollama was already online at start, we never claim ownership.
+static LIORA_OWNED_OLLAMA: AtomicBool = AtomicBool::new(false);
+
 /// Active chat streams that can be cancelled from the UI.
 static STREAM_CANCEL: Mutex<Option<HashMap<String, Arc<AtomicBool>>>> = Mutex::new(None);
 
@@ -300,21 +305,7 @@ fn resolve_ollama_exe() -> Option<PathBuf> {
     None
 }
 
-fn ollama_app_path(exe: &PathBuf) -> Option<PathBuf> {
-    let parent = exe.parent()?;
-    #[cfg(windows)]
-    {
-        let app = parent.join("ollama app.exe");
-        if app.is_file() {
-            return Some(app);
-        }
-    }
-    let app2 = parent.join("Ollama.app");
-    if app2.exists() {
-        return Some(app2);
-    }
-    None
-}
+// Intentionally no launch of "ollama app.exe" / tray GUI — product uses headless serve only.
 
 fn read_version(exe: &PathBuf) -> Option<String> {
     let mut cmd = Command::new(exe);
@@ -403,7 +394,7 @@ fn spawn_detached(exe: &PathBuf, args: &[&str]) -> Result<(), String> {
 }
 
 fn start_ollama_serve_inner() -> Result<StartResult, String> {
-    // Already healthy?
+    // Already healthy? Do not take ownership — leave user's engine alone on exit.
     if probe_api_inner().online {
         return Ok(StartResult {
             ok: true,
@@ -414,78 +405,75 @@ fn start_ollama_serve_inner() -> Result<StartResult, String> {
     }
 
     let exe = resolve_ollama_exe().ok_or_else(|| "ollama_not_found".to_string())?;
-    let app = ollama_app_path(&exe);
 
-    // Windows: prefer tray host (`ollama app.exe`) — more reliable as long-lived service.
-    // Then fall back to `ollama serve`.
-    #[cfg(windows)]
-    {
-        if let Some(ref app_path) = app {
-            if let Err(e) = spawn_detached(app_path, &[]) {
-                // continue to serve
-                let _ = e;
-            } else if wait_for_api(30_000) {
-                return Ok(StartResult {
-                    ok: true,
-                    already_running: false,
-                    method: "ollama_app".into(),
-                    error: None,
-                });
-            }
-        }
-    }
+    // Product: run engine headless only — never launch "ollama app.exe" tray UI.
+    // CREATE_NO_WINDOW via spawn_detached keeps console invisible.
+    spawn_detached(&exe, &["serve"])?;
 
-    // `ollama serve`
-    if let Err(e1) = spawn_detached(&exe, &["serve"]) {
-        if let Some(ref app_path) = app {
-            spawn_detached(app_path, &[]).map_err(|e2| format!("{e1}; app_fallback: {e2}"))?;
-            if wait_for_api(30_000) {
-                return Ok(StartResult {
-                    ok: true,
-                    already_running: false,
-                    method: "ollama_app_after_serve_spawn_err".into(),
-                    error: None,
-                });
-            }
-            return Ok(StartResult {
-                ok: false,
-                already_running: false,
-                method: "ollama_app_after_serve_spawn_err".into(),
-                error: Some("timeout_waiting_for_api".into()),
-            });
-        }
-        return Err(e1);
-    }
-
-    if wait_for_api(30_000) {
+    if wait_for_api(35_000) {
+        LIORA_OWNED_OLLAMA.store(true, Ordering::SeqCst);
         return Ok(StartResult {
             ok: true,
             already_running: false,
-            method: "ollama_serve".into(),
+            method: "ollama_serve_headless".into(),
             error: None,
         });
-    }
-
-    // Last chance: app host
-    if let Some(ref app_path) = app {
-        let _ = spawn_detached(app_path, &[]);
-        if wait_for_api(20_000) {
-            return Ok(StartResult {
-                ok: true,
-                already_running: false,
-                method: "ollama_app_after_serve_timeout".into(),
-                error: None,
-            });
-        }
     }
 
     let detail = probe_api_inner().detail;
     Ok(StartResult {
         ok: false,
         already_running: false,
-        method: "all_methods".into(),
+        method: "ollama_serve_headless".into(),
         error: Some(format!("timeout_waiting_for_api:{detail}")),
     })
+}
+
+/// Stop Ollama processes only if Liora started them this session.
+fn stop_ollama_if_owned() {
+    if !LIORA_OWNED_OLLAMA.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // /T kills child tree; silent flags avoid console flash
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "ollama.exe", "/T"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        // In case an older build or side-effect left the tray host running
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "ollama app.exe", "/T"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("pkill")
+            .args(["-f", "ollama serve"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// Manual stop (e.g. settings); same ownership rule as exit.
+#[tauri::command]
+fn stop_ollama_serve() -> bool {
+    let owned = LIORA_OWNED_OLLAMA.load(Ordering::SeqCst);
+    if owned {
+        stop_ollama_if_owned();
+    }
+    owned
 }
 
 /// Start local engine and wait until HTTP API answers (not only TCP).
@@ -1331,6 +1319,7 @@ pub fn run() {
             detect_ollama,
             probe_ollama_api,
             start_ollama_serve,
+            stop_ollama_serve,
             ollama_http,
             ollama_chat_stream,
             ollama_chat_cancel,
@@ -1348,6 +1337,15 @@ pub fn run() {
             storage_read_json,
             storage_write_json
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Liora");
+        .build(tauri::generate_context!())
+        .expect("error while building Liora")
+        .run(|_app, event| {
+            // Tear down headless engine when the shell exits
+            if let tauri::RunEvent::Exit = event {
+                stop_ollama_if_owned();
+            }
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                stop_ollama_if_owned();
+            }
+        });
 }

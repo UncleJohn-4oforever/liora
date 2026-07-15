@@ -1,6 +1,12 @@
-import type { Message } from "../../types";
+import type { CharacterCard, Message } from "../../types";
 import type { MemoryItem, MemoryStoreData } from "../../types/memory";
+import { DEFAULT_CHARACTER } from "../../data/defaults";
 import { L3_IDENTITY_PREDICATES } from "./profileHeuristics";
+import {
+  chunksForCharacter,
+  isMetaCharacter,
+  memoriesForInjection,
+} from "./scope";
 import { activeMemories } from "./store";
 import { retrieveChunks, tokenize } from "./terms";
 import { HOT_TURNS } from "./pipeline";
@@ -37,35 +43,50 @@ function rankMemories(mems: MemoryItem[], query: string, limit: number): MemoryI
 }
 
 /**
- * Build memory block for L0 system prompt.
- * Always injects core profile (L3) + style (L4) when present — even on new sessions —
- * so facts like pets are available without re-introduction.
+ * Build memory block for L0 system prompt (R3 scoped).
+ * Meta → master dossier only. Persona → that character's atoms only.
  */
 export function buildMemorySystemBlock(
   store: MemoryStoreData,
   sessionId: string,
   latestUserText: string,
   locale: "zh" | "en",
+  character?: CharacterCard | null,
 ): string {
   const lines: string[] = [];
+  const card = character ?? DEFAULT_CHARACTER;
+  const isMeta = isMetaCharacter(card);
+  const characterId = card.id || DEFAULT_CHARACTER.id;
+
   const header =
     locale === "en"
-      ? [
-          "Long-term memory (auditable). Prefer the user's latest message if conflict.",
-          "Use these facts when relevant. Do not invent memories not listed.",
-          "Profile facts apply across all chats.",
-        ]
-      : [
-          "以下是可审计的长期记忆。与用户当前消息冲突时以当前消息为准。",
-          "相关时请主动使用这些事实，不要编造未列出的记忆。",
-          "用户画像在所有会话中持续有效。",
-        ];
+      ? isMeta
+        ? [
+            "Long-term master memory (user dossier). Prefer the user's latest message if conflict.",
+            "You are the local Meta AI steward of this dossier. Do not invent facts not listed.",
+          ]
+        : [
+            "Long-term memory for this character only (auditable). Prefer the latest message if conflict.",
+            "Use these facts when relevant. Do not invent memories not listed. Do not assume other characters' memories.",
+          ]
+      : isMeta
+        ? [
+            "以下是用户主档记忆（仅本机 AI / Meta 可见）。与当前消息冲突时以当前消息为准。",
+            "你是主档管家；不要编造未列出的事实。",
+          ]
+        : [
+            "以下是当前角色专属记忆（可审计）。与当前消息冲突时以当前消息为准。",
+            "相关时请使用这些事实；不要编造；不要假设其他角色的记忆。",
+          ];
   lines.push(...header);
 
-  const mems = activeMemories(store);
+  const mems = memoriesForInjection(activeMemories(store), {
+    isMeta,
+    characterId,
+  });
   const q = latestUserText.trim();
 
-  // L3: identity predicates first (name/pet), always inject
+  // L3: identity predicates first (name/pet), always inject within scope
   const l3All = mems.filter((m) => m.layer === "L3");
   const l3Identity = l3All
     .filter((m) => L3_IDENTITY_PREDICATES.has(m.predicate.toLowerCase()))
@@ -117,7 +138,15 @@ export function buildMemorySystemBlock(
   const l5 = [...l5Map.values()].slice(0, 8);
 
   if (l3.length) {
-    lines.push(locale === "en" ? "User profile (always on):" : "用户画像（全局生效）：");
+    lines.push(
+      locale === "en"
+        ? isMeta
+          ? "User master profile:"
+          : "Character-relevant profile:"
+        : isMeta
+          ? "用户主档画像："
+          : "本角色相关画像：",
+    );
     for (const m of l3) {
       lines.push(`- ${m.subject} · ${m.predicate}: ${m.object}`);
     }
@@ -135,11 +164,10 @@ export function buildMemorySystemBlock(
     }
   }
 
-  // Episodes: prefer meso + recent micro; always surface open_loops
+  // Episodes: this session + same character only (no other persona history)
   const epsSession = store.episodes
     .filter((e) => e.sessionId === sessionId)
     .sort((a, b) => {
-      // meso first, then by recency
       if (a.level !== b.level) return a.level === "meso" ? -1 : 1;
       return b.createdAt - a.createdAt;
     });
@@ -150,14 +178,17 @@ export function buildMemorySystemBlock(
 
   const tokens = tokenize(q);
   const epsOther = store.episodes
-    .filter((e) => e.sessionId !== sessionId)
+    .filter(
+      (e) =>
+        e.sessionId !== sessionId &&
+        (e.characterId ?? "") === characterId,
+    )
     .map((e) => {
       const bag = `${e.topic} ${e.rawText} ${e.entities.join(" ")}`.toLowerCase();
       let score = 0;
       for (const t of tokens) {
         if (t.length >= 2 && bag.includes(t)) score += 1;
       }
-      // entity overlap with L3 subjects
       for (const m of l3) {
         const ent = m.subject.replace(/^pet:|^project:/, "");
         if (ent.length >= 2 && bag.includes(ent.toLowerCase())) score += 2;
@@ -194,9 +225,9 @@ export function buildMemorySystemBlock(
   }
 
   if (q) {
-    // Enrich query with memory keywords for better chunk hit
     const enrich = [q, ...l3.slice(0, 5).map((m) => m.object)].join(" ");
-    const hits = retrieveChunks(store.chunks, enrich, 4);
+    const scopedChunks = chunksForCharacter(store.chunks, characterId);
+    const hits = retrieveChunks(scopedChunks, enrich, 4);
     if (hits.length) {
       lines.push(locale === "en" ? "Retrieved details:" : "检索到的细节：");
       for (const h of hits) {

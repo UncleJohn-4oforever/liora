@@ -23,12 +23,12 @@ export async function pickGgufFile(): Promise<string | null> {
 
 /**
  * Register a local GGUF with Ollama (`ollama create` via Modelfile).
+ * Does not bake a SYSTEM prompt — persona is owned by Liora character cards.
  * Engine should be installed; API online is preferred but create uses CLI.
  */
 export async function importLocalGguf(options: {
   path: string;
   name: string;
-  system?: string;
 }): Promise<ImportGgufResult> {
   if (!isTauri()) {
     return {
@@ -42,7 +42,7 @@ export async function importLocalGguf(options: {
     return await invokeTauri<ImportGgufResult>("ollama_import_gguf", {
       path: options.path,
       name: options.name,
-      system: options.system ?? null,
+      system: null,
     });
   } catch (e) {
     return {

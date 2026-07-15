@@ -1,6 +1,8 @@
 import type { EpisodeSummary, MemoryStoreData } from "../../types/memory";
+import { DEFAULT_CHARACTER } from "../../data/defaults";
 import { uid } from "../id";
 import { ollamaComplete, parseJsonLoose } from "./ollamaJson";
+import { stampEpisode } from "./scope";
 
 /** Merge when a session has more micro episodes than this. */
 export const MESO_MICRO_THRESHOLD = 8;
@@ -15,6 +17,7 @@ export async function maybeMesoMerge(options: {
   store: MemoryStoreData;
   sessionId: string;
   model: string;
+  characterId?: string;
   signal?: AbortSignal;
 }): Promise<{
   store: MemoryStoreData;
@@ -22,6 +25,11 @@ export async function maybeMesoMerge(options: {
   label?: string;
 }> {
   const { sessionId, model, signal } = options;
+  const characterId =
+    options.characterId ||
+    options.store.episodes.find((e) => e.sessionId === sessionId)
+      ?.characterId ||
+    DEFAULT_CHARACTER.id;
   let store = options.store;
 
   const micros = store.episodes
@@ -41,6 +49,7 @@ export async function maybeMesoMerge(options: {
   if (!meso) {
     meso = heuristicMeso(batch, sessionId, fromMsg, toMsg);
   }
+  meso = stampEpisode(meso, characterId);
 
   store = {
     ...store,

@@ -14,6 +14,16 @@ import {
   replaceMemoryStore,
   saveSettingsToDb,
 } from "../lib/db";
+import {
+  createCharacterDraft,
+  displayCharacterName,
+  ensureBuiltin,
+  loadCharacters,
+  removeCharacter,
+  resolveCharacter,
+  saveCharacters,
+  upsertCharacter,
+} from "../lib/characters/repo";
 import { uid } from "../lib/id";
 import { formatMemoryJobSummary } from "../lib/memory/assemble";
 import {
@@ -29,6 +39,11 @@ import {
   rememberExplicitText,
 } from "../lib/memory/rememberExplicit";
 import {
+  isMetaCharacter,
+  memoriesForPanel,
+  migrateMemoryStoreScopes,
+} from "../lib/memory/scope";
+import {
   activeMemories,
   clearAllMemories,
   softDeleteMemory,
@@ -36,6 +51,7 @@ import {
 } from "../lib/memory/store";
 import type { MemoryItem, MemoryStoreData } from "../types/memory";
 import { genOptionsForChat, normalizeContextSize } from "../lib/chatPrompt";
+import { humanizeError } from "../lib/errors";
 import {
   resolveModelName,
   streamOllamaChat,
@@ -51,25 +67,37 @@ import {
   readFileAsText,
   type ImportMode,
 } from "../lib/backup";
-import type { AppSettings, Locale, Message, Session } from "../types";
+import type {
+  AppSettings,
+  CharacterCard,
+  ChatFolder,
+  Locale,
+  Message,
+  Session,
+} from "../types";
 
 const defaultSettings: AppSettings = {
   locale: "zh",
   defaultModelId: DEFAULT_MODEL.id,
+  defaultCharacterId: DEFAULT_CHARACTER.id,
   memoryEnabled: true,
   summaryEveryN: SUMMARY_EVERY_N_MESSAGES,
   showThinking: true,
-  replyStyle: "balanced",
   answerLength: "normal",
   contextSize: 8192,
+  chatFolders: [],
 };
 
-function createSession(locale: Locale, modelId = DEFAULT_MODEL.id): Session {
+function createSession(
+  locale: Locale,
+  modelId = DEFAULT_MODEL.id,
+  characterId = DEFAULT_CHARACTER.id,
+): Session {
   const now = Date.now();
   return {
     id: uid("ses"),
     title: t(locale).defaultSessionTitle,
-    characterId: DEFAULT_CHARACTER.id,
+    characterId,
     modelId,
     createdAt: now,
     updatedAt: now,
@@ -92,6 +120,9 @@ export function useLioraState() {
   const [ready, setReady] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [characters, setCharacters] = useState<CharacterCard[]>(() =>
+    ensureBuiltin([]),
+  );
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [input, setInput] = useState("");
@@ -101,6 +132,7 @@ export function useLioraState() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelHubOpen, setModelHubOpen] = useState(false);
+  const [characterHubOpen, setCharacterHubOpen] = useState(false);
   /** Last completed turn's token usage (from Ollama). */
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   /** Context limit used for that turn (num_ctx). */
@@ -127,11 +159,24 @@ export function useLioraState() {
   memoryStoreRef.current = memoryStore;
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const charactersRef = useRef(characters);
+  charactersRef.current = characters;
   /** Always-fresh settings inside send (avoid stale num_ctx / num_predict). */
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const dict = useMemo(() => t(settings.locale), [settings.locale]);
   const active = sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+  const defaultCharacterId =
+    settings.defaultCharacterId || DEFAULT_CHARACTER.id;
+  const character = useMemo(
+    () =>
+      resolveCharacter(
+        characters,
+        active?.characterId ?? defaultCharacterId,
+        defaultCharacterId,
+      ),
+    [characters, active?.characterId, defaultCharacterId],
+  );
   const engineApi = useEngine(settings.locale);
   const ollamaModels = engineApi.models;
   const ollamaOnline = engineApi.online;
@@ -142,21 +187,35 @@ export function useLioraState() {
     (async () => {
       try {
         await migrateFromLocalStorageIfNeeded(defaultSettings);
-        const [s, sess, mem] = await Promise.all([
+        const [s, sess, mem, chars] = await Promise.all([
           loadSettingsFromDb(defaultSettings),
           loadAllSessions(),
           loadMemoryStoreFromDb(),
+          loadCharacters(),
         ]);
         if (cancelled) return;
+        const charsOk = ensureBuiltin(chars);
+        await saveCharacters(charsOk);
+        const defChar =
+          s.defaultCharacterId &&
+          charsOk.some((c) => c.id === s.defaultCharacterId)
+            ? s.defaultCharacterId
+            : DEFAULT_CHARACTER.id;
+        const settingsOk = { ...s, defaultCharacterId: defChar };
         let nextSessions = sess;
         if (nextSessions.length === 0) {
-          nextSessions = [createSession(s.locale, s.defaultModelId)];
+          nextSessions = [
+            createSession(settingsOk.locale, settingsOk.defaultModelId, defChar),
+          ];
           await replaceAllSessions(nextSessions);
         }
-        setSettings(s);
+        setSettings(settingsOk);
+        setCharacters(charsOk);
         setSessions(nextSessions);
         setActiveId(nextSessions[0].id);
-        setMemoryStore(mem);
+        setMemoryStore(
+          migrateMemoryStoreScopes(mem, DEFAULT_CHARACTER.id),
+        );
         setReady(true);
       } catch (e) {
         if (!cancelled) {
@@ -170,16 +229,29 @@ export function useLioraState() {
             const s = loadSettings(defaultSettings);
             let sess = loadSessions();
             if (sess.length === 0) {
-              sess = [createSession(s.locale, s.defaultModelId)];
+              sess = [
+                createSession(
+                  s.locale,
+                  s.defaultModelId,
+                  s.defaultCharacterId || DEFAULT_CHARACTER.id,
+                ),
+              ];
             }
             setSettings(s);
+            setCharacters(ensureBuiltin([]));
             setSessions(sess);
             setActiveId(sess[0].id);
-            setMemoryStore(loadMemoryStore());
+            setMemoryStore(
+              migrateMemoryStoreScopes(
+                loadMemoryStore(),
+                DEFAULT_CHARACTER.id,
+              ),
+            );
           } catch {
             const s = createSession("zh");
             setSessions([s]);
             setActiveId(s.id);
+            setCharacters(ensureBuiltin([]));
           }
           setReady(true);
         }
@@ -208,6 +280,17 @@ export function useLioraState() {
     mirrorSettingsToLocalStorage(settings);
     void saveSettingsToDb(settings);
   }, [settings, ready]);
+
+  // Persist characters
+  useEffect(() => {
+    if (!ready) return;
+    const t = window.setTimeout(() => {
+      void saveCharacters(characters).catch(() => {
+        /* ignore */
+      });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [characters, ready]);
 
   // Debounced persist memory
   useEffect(() => {
@@ -251,6 +334,7 @@ export function useLioraState() {
       settings,
       sessions: sessionsRef.current,
       memory: memoryStoreRef.current,
+      characters: charactersRef.current,
     });
     downloadBackup(backup);
     setToast({
@@ -268,6 +352,7 @@ export function useLioraState() {
           settings,
           sessions: sessionsRef.current,
           memory: memoryStoreRef.current,
+          characters: charactersRef.current,
         },
         backup,
         mode,
@@ -275,6 +360,7 @@ export function useLioraState() {
       setSettings(next.settings);
       setSessions(next.sessions);
       setMemoryStore(next.memory);
+      setCharacters(ensureBuiltin(next.characters));
       if (next.sessions.length > 0) {
         setActiveId(next.sessions[0].id);
       }
@@ -307,13 +393,103 @@ export function useLioraState() {
   );
 
   const newSession = useCallback(() => {
-    const s = createSession(settings.locale, settings.defaultModelId);
+    const charId =
+      settings.defaultCharacterId || DEFAULT_CHARACTER.id;
+    const s = createSession(
+      settings.locale,
+      settings.defaultModelId,
+      charId,
+    );
     setSessions((prev) => [s, ...prev]);
     setActiveId(s.id);
     setInput("");
     setLastError(null);
     resetContextUsage();
-  }, [settings.locale, settings.defaultModelId, resetContextUsage]);
+  }, [
+    settings.locale,
+    settings.defaultModelId,
+    settings.defaultCharacterId,
+    resetContextUsage,
+  ]);
+
+  /** Bind character to the active session only (not global). */
+  const setSessionCharacter = useCallback(
+    (characterId: string) => {
+      const exists = charactersRef.current.some((c) => c.id === characterId);
+      if (!exists) return;
+      setSessions((prev) => {
+        const aid = activeId || prev[0]?.id;
+        if (!aid) return prev;
+        return prev.map((s) =>
+          s.id === aid ? { ...s, characterId, updatedAt: Date.now() } : s,
+        );
+      });
+    },
+    [activeId],
+  );
+
+  const setDefaultCharacter = useCallback((characterId: string) => {
+    const exists = charactersRef.current.some((c) => c.id === characterId);
+    if (!exists) return;
+    setSettings((s) => ({ ...s, defaultCharacterId: characterId }));
+  }, []);
+
+  const saveCharacterCard = useCallback((card: CharacterCard) => {
+    if (!card.id) {
+      const draft = createCharacterDraft({
+        name: card.name,
+        tagline: card.tagline,
+        description: card.description,
+        systemPrompt: card.systemPrompt,
+        accent: card.accent || undefined,
+        avatarUrl: card.avatarUrl,
+      });
+      setCharacters((prev) => upsertCharacter(prev, draft));
+      // Bind new card to current session so user can chat immediately
+      setSessions((prev) => {
+        const aid = activeId || prev[0]?.id;
+        if (!aid) return prev;
+        return prev.map((s) =>
+          s.id === aid
+            ? { ...s, characterId: draft.id, updatedAt: Date.now() }
+            : s,
+        );
+      });
+      return;
+    }
+    setCharacters((prev) => upsertCharacter(prev, card));
+  }, [activeId]);
+
+  const deleteCharacterCard = useCallback(
+    (id: string) => {
+      const { items, removed } = removeCharacter(charactersRef.current, id);
+      if (!removed) return;
+      setCharacters(items);
+      const fallback =
+        settingsRef.current.defaultCharacterId === id
+          ? DEFAULT_CHARACTER.id
+          : settingsRef.current.defaultCharacterId || DEFAULT_CHARACTER.id;
+      if (settingsRef.current.defaultCharacterId === id) {
+        setSettings((s) => ({
+          ...s,
+          defaultCharacterId: DEFAULT_CHARACTER.id,
+        }));
+      }
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.characterId === id
+            ? { ...s, characterId: fallback, updatedAt: Date.now() }
+            : s,
+        ),
+      );
+    },
+    [],
+  );
+
+  /** Replace full character list (e.g. after JSON import). */
+  const replaceCharacters = useCallback((items: CharacterCard[]) => {
+    setCharacters(ensureBuiltin(items));
+  }, []);
 
   const setSessionModel = useCallback(
     (modelId: string) => {
@@ -330,6 +506,40 @@ export function useLioraState() {
     },
     [active],
   );
+
+  /**
+   * When engine reports installed models, heal stale default / session model ids
+   * (common after GGUF rename or deleted tags → Ollama 404).
+   */
+  useEffect(() => {
+    if (!ready || ollamaModels.length === 0) return;
+    const def = settings.defaultModelId?.trim() ?? "";
+    const resolvedDef = resolveModelName(def, ollamaModels);
+    if (resolvedDef && resolvedDef !== def) {
+      setSettings((s) =>
+        s.defaultModelId === resolvedDef
+          ? s
+          : { ...s, defaultModelId: resolvedDef },
+      );
+    }
+    setSessions((prev) => {
+      let changed = false;
+      const next = prev.map((s) => {
+        const want = (s.modelId || def || "").trim();
+        const resolved = resolveModelName(want, ollamaModels);
+        if (resolved && resolved !== s.modelId) {
+          changed = true;
+          return { ...s, modelId: resolved, updatedAt: Date.now() };
+        }
+        if (!s.modelId && resolvedDef) {
+          changed = true;
+          return { ...s, modelId: resolvedDef, updatedAt: Date.now() };
+        }
+        return s;
+      });
+      return changed ? next : prev;
+    });
+  }, [ready, ollamaModels, settings.defaultModelId]);
 
   const deleteSession = useCallback(
     (id: string) => {
@@ -361,6 +571,84 @@ export function useLioraState() {
     );
   }, []);
 
+  const chatFolders = settings.chatFolders ?? [];
+
+  const newFolder = useCallback(() => {
+    const name =
+      window.prompt(
+        settings.locale === "en" ? "Folder name" : "文件夹名称",
+        settings.locale === "en" ? "New folder" : "新建文件夹",
+      )?.trim() ||
+      (settings.locale === "en" ? "New folder" : "新建文件夹");
+    const folder: ChatFolder = {
+      id: uid("fld"),
+      name,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      collapsed: false,
+    };
+    setSettings((s) => ({
+      ...s,
+      chatFolders: [...(s.chatFolders ?? []), folder],
+    }));
+  }, [settings.locale]);
+
+  const renameFolder = useCallback((folderId: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setSettings((s) => ({
+      ...s,
+      chatFolders: (s.chatFolders ?? []).map((f) =>
+        f.id === folderId
+          ? { ...f, name: trimmed, updatedAt: Date.now() }
+          : f,
+      ),
+    }));
+  }, []);
+
+  const deleteFolder = useCallback((folderId: string) => {
+    setSettings((s) => ({
+      ...s,
+      chatFolders: (s.chatFolders ?? []).filter((f) => f.id !== folderId),
+    }));
+    // Sessions return to unfiled root
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.folderId === folderId
+          ? { ...s, folderId: null, updatedAt: Date.now() }
+          : s,
+      ),
+    );
+  }, []);
+
+  const toggleFolderCollapsed = useCallback((folderId: string) => {
+    setSettings((s) => ({
+      ...s,
+      chatFolders: (s.chatFolders ?? []).map((f) =>
+        f.id === folderId ? { ...f, collapsed: !f.collapsed } : f,
+      ),
+    }));
+  }, []);
+
+  const moveSessionToFolder = useCallback(
+    (sessionId: string, folderId: string | null) => {
+      if (folderId) {
+        const ok = (settingsRef.current.chatFolders ?? []).some(
+          (f) => f.id === folderId,
+        );
+        if (!ok) return;
+      }
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, folderId: folderId || null, updatedAt: Date.now() }
+            : s,
+        ),
+      );
+    },
+    [],
+  );
+
   const stop = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -382,12 +670,20 @@ export function useLioraState() {
         const everyN =
           settings.summaryEveryN ?? SUMMARY_EVERY_N_MESSAGES;
         const numCtx = normalizeContextSize(settings.contextSize);
+        const sess =
+          sessionsRef.current.find((x) => x.id === sessionId) ?? null;
+        const char = resolveCharacter(
+          charactersRef.current,
+          sess?.characterId,
+          settingsRef.current.defaultCharacterId || DEFAULT_CHARACTER.id,
+        );
         const result = await runMemoryPipeline({
           store: memoryStoreRef.current,
           sessionId,
           messages,
           model,
           memoryEnabled: true,
+          character: char,
           force,
           everyN,
           numCtx,
@@ -402,6 +698,10 @@ export function useLioraState() {
             },
             settings.locale,
           );
+          const compressHint =
+            settings.locale === "en"
+              ? "Compressed older turns into summary"
+              : "已将更早对话压缩为摘要";
           const n =
             result.updatedLabels.length ||
             result.layerCounts.L3 +
@@ -412,8 +712,8 @@ export function useLioraState() {
             count: n,
             labels: result.updatedLabels.length
               ? result.updatedLabels
-              : [detail],
-            detail,
+              : [compressHint],
+            detail: `${compressHint} · ${detail}`,
           });
         }
       } catch {
@@ -460,11 +760,17 @@ export function useLioraState() {
       setRememberBusy(true);
       setLastError(null);
       try {
+        const char = resolveCharacter(
+          charactersRef.current,
+          active.characterId,
+          settingsRef.current.defaultCharacterId || DEFAULT_CHARACTER.id,
+        );
         const result = await rememberExplicitText({
           store: memoryStoreRef.current,
           sessionId: active.id,
           text,
           model,
+          character: char,
         });
         if (result.error === "empty") return;
         if (result.pendingSensitive) {
@@ -505,24 +811,67 @@ export function useLioraState() {
     const text = input.trim();
     if (!text || !active || generating) return;
 
+    const sNow = settingsRef.current;
+
     if (!ollamaOnline) {
-      setLastError(dict.ollamaOfflineHint);
+      setLastError(
+        humanizeError("connect_failed", sNow.locale) || dict.ollamaOfflineHint,
+      );
       return;
+    }
+
+    if (ollamaModels.length === 0) {
+      setLastError(humanizeError("no models", sNow.locale));
+      return;
+    }
+
+    const preferredModel = (
+      active.modelId ||
+      sNow.defaultModelId ||
+      ""
+    ).trim();
+    const model = resolveModelName(preferredModel, ollamaModels);
+    if (!ollamaModels.includes(model) && !ollamaModels.some((m) => m.startsWith(`${model}:`))) {
+      setLastError(humanizeError(`model '${preferredModel || "?"}' not found`, sNow.locale));
+      return;
+    }
+    // Heal session if we remapped to an installed name
+    if (model && model !== active.modelId) {
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === active.id
+            ? { ...s, modelId: model, updatedAt: Date.now() }
+            : s,
+        ),
+      );
+      if (!sNow.defaultModelId || sNow.defaultModelId === preferredModel) {
+        setSettings((s) => ({ ...s, defaultModelId: model }));
+      }
     }
 
     const rememberMatch = text.match(
       /^(?:请)?记住(?:这个|一下|：|:)?\s*(.+)$/s,
     );
-    if (rememberMatch?.[1] && settings.memoryEnabled) {
+    if (rememberMatch?.[1] && sNow.memoryEnabled) {
       void rememberText(rememberMatch[1]);
     } else if (
-      settings.memoryEnabled &&
+      sNow.memoryEnabled &&
       /(请记住|帮我记住|记下来)/.test(text)
     ) {
       void rememberText(text);
     }
 
     const sessionId = active.id;
+    const sessionCharacter = resolveCharacter(
+      charactersRef.current,
+      active.characterId,
+      sNow.defaultCharacterId || DEFAULT_CHARACTER.id,
+    );
+    const characterName = displayCharacterName(
+      sessionCharacter,
+      sNow.locale,
+    );
+
     const userMsg: Message = {
       id: uid("msg"),
       role: "user",
@@ -535,6 +884,8 @@ export function useLioraState() {
       role: "assistant",
       content: "",
       createdAt: Date.now(),
+      characterId: sessionCharacter.id,
+      characterName,
     };
 
     const title =
@@ -543,10 +894,8 @@ export function useLioraState() {
         : active.title;
 
     const historyForModel = [...active.messages, userMsg];
-    // Use settingsRef so context/length/thinking toggles always apply
-    const sNow = settingsRef.current;
+    // settingsRef already snapped to sNow above
     const contextSize = normalizeContextSize(sNow.contextSize);
-    const replyStyle = sNow.replyStyle ?? "balanced";
     const answerLength = sNow.answerLength ?? "normal";
     const showThinking = sNow.showThinking !== false;
 
@@ -556,11 +905,11 @@ export function useLioraState() {
       sessionId,
       store: memoryStoreRef.current,
       locale: sNow.locale,
-      replyStyle,
       answerLength,
       memoryEnabled: Boolean(sNow.memoryEnabled),
       showThinking,
       contextSize,
+      character: sessionCharacter,
     });
     const hot = assembled.hotMessages;
     const fullSystem = assembled.systemPrompt;
@@ -585,11 +934,6 @@ export function useLioraState() {
 
     const ac = new AbortController();
     abortRef.current = ac;
-
-    const model = resolveModelName(
-      active.modelId || sNow.defaultModelId,
-      ollamaModels,
-    );
 
     const ollamaMessages = toOllamaMessages(hot, fullSystem);
     const genOptions = genOptionsForChat(
@@ -622,9 +966,10 @@ export function useLioraState() {
         genOptions,
       })) {
         if (chunk.error && chunk.error !== "aborted") {
-          setLastError(chunk.error);
+          const friendly = humanizeError(chunk.error, sNow.locale);
+          setLastError(friendly);
           if (!acc) {
-            const errText = `${dict.generateFailed}\n${chunk.error}`;
+            const errText = `${dict.generateFailed}\n${friendly}`;
             setSessions((prev) =>
               prev.map((s) =>
                 s.id === sessionId
@@ -721,11 +1066,7 @@ export function useLioraState() {
               : s,
           ),
         );
-        setLastError(
-          sNow.locale === "en"
-            ? "Reply truncated (length limit). Raise Context or turn off thinking."
-            : "回答被长度上限截断。请加大上下文，或关闭思考过程后重试。",
-        );
+        setLastError(humanizeError("done_reason length", sNow.locale));
       }
 
       if (!ac.signal.aborted && acc) {
@@ -767,7 +1108,13 @@ export function useLioraState() {
     setToast(null);
   }, []);
 
-  const memories = useMemo(() => activeMemories(memoryStore), [memoryStore]);
+  const memories = useMemo(() => {
+    const all = activeMemories(memoryStore);
+    return memoriesForPanel(all, {
+      isMeta: isMetaCharacter(character),
+      characterId: character.id,
+    });
+  }, [memoryStore, character]);
 
   /**
    * After pull/import: re-probe models; optionally switch active session to it.
@@ -806,7 +1153,14 @@ export function useLioraState() {
     engineOpenInstall: engineApi.openInstallPage,
     engineAfterInstall: engineApi.afterInstallRecheck,
     setSessionModel,
-    character: DEFAULT_CHARACTER,
+    characters,
+    character,
+    defaultCharacterId,
+    setSessionCharacter,
+    setDefaultCharacter,
+    saveCharacterCard,
+    deleteCharacterCard,
+    replaceCharacters,
     model: DEFAULT_MODEL,
     setLocale,
     patchSettings,
@@ -815,6 +1169,8 @@ export function useLioraState() {
     setSettingsOpen,
     modelHubOpen,
     setModelHubOpen,
+    characterHubOpen,
+    setCharacterHubOpen,
     afterModelPulled,
     tokenUsage,
     usageCtxLimit,
@@ -824,6 +1180,12 @@ export function useLioraState() {
     newSession,
     deleteSession,
     renameSession,
+    chatFolders,
+    newFolder,
+    renameFolder,
+    deleteFolder,
+    toggleFolderCollapsed,
+    moveSessionToFolder,
     send,
     stop,
     memories,
@@ -844,24 +1206,45 @@ export function useLioraState() {
     cancelSensitiveSave,
     reloadFromDisk: async () => {
       try {
-        const [s, sess, mem] = await Promise.all([
+        const [s, sess, mem, chars] = await Promise.all([
           loadSettingsFromDb(defaultSettings),
           loadAllSessions(),
           loadMemoryStoreFromDb(),
+          loadCharacters(),
         ]);
+        const charsOk = ensureBuiltin(chars);
+        const defChar =
+          s.defaultCharacterId &&
+          charsOk.some((c) => c.id === s.defaultCharacterId)
+            ? s.defaultCharacterId
+            : DEFAULT_CHARACTER.id;
+        const settingsOk = { ...s, defaultCharacterId: defChar };
         let nextSessions = sess;
         if (nextSessions.length === 0) {
-          nextSessions = [createSession(s.locale, s.defaultModelId)];
+          nextSessions = [
+            createSession(
+              settingsOk.locale,
+              settingsOk.defaultModelId,
+              defChar,
+            ),
+          ];
           await replaceAllSessions(nextSessions);
         }
-        setSettings(s);
+        setSettings(settingsOk);
+        setCharacters(charsOk);
         setSessions(nextSessions);
         setActiveId(nextSessions[0].id);
-        setMemoryStore(mem);
+        setMemoryStore(
+          migrateMemoryStoreScopes(mem, DEFAULT_CHARACTER.id),
+        );
         resetContextUsage();
       } catch (e) {
         console.error("reloadFromDisk failed", e);
       }
     },
+    completeOnboarding: () => {
+      patchSettings({ onboardingDone: true });
+    },
+    needsOnboarding: settings.onboardingDone !== true,
   };
 }

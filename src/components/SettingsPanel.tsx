@@ -338,29 +338,6 @@ export function SettingsPanel({
           </div>
 
           <div className="settings-block pad-x">
-            <span className="label">{dict.replyStyle}</span>
-            <p className="muted small">{dict.replyStyleHint}</p>
-            <div className="pref-chips" style={{ marginTop: 8 }}>
-              {(
-                [
-                  ["balanced", dict.replyStyleBalanced],
-                  ["work", dict.replyStyleWork],
-                  ["companion", dict.replyStyleCompanion],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`chip ${(settings.replyStyle ?? "balanced") === id ? "chip-on" : ""}`}
-                  onClick={() => onChangeSettings({ replyStyle: id })}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="settings-block pad-x">
             <span className="label">{dict.answerLength}</span>
             <p className="muted small">{dict.answerLengthHint}</p>
             <div className="pref-chips" style={{ marginTop: 8 }}>

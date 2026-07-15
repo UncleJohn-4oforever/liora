@@ -1,22 +1,38 @@
 import type { CharacterCard, ModelInfo } from "../types";
 
-/** Default character pack (static card for S0). */
+/**
+ * Builtin Meta: local AI that owns the user master dossier.
+ * Playable personas use kind "persona" and do not see master memory.
+ */
 export const DEFAULT_CHARACTER: CharacterCard = {
   id: "char_default_assistant",
   name: "Liora",
   nameEn: "Liora",
-  tagline: "本地助手 · 记得住重点",
-  taglineEn: "Local assistant · keeps what matters",
+  tagline: "本机 AI · 用户主记忆",
+  taglineEn: "Local AI · master memory",
   description:
-    "默认助手角色。语气清晰、克制，不夸张拟人。记忆与风格策略将在后续版本按角色分离。",
+    "本机 AI（Meta）。负责记住关于你的长期信息（主档），并了解角色库概况。日常扮演请新建或切换到其他角色卡——那些角色不会自动读取主档。",
   descriptionEn:
-    "Default assistant. Clear and restrained tone. Memory and style policies will be per-character later.",
-  accent: "linear-gradient(145deg, #3d5a80 0%, #98c1d9 45%, #e0fbfc 100%)",
+    "Local Meta AI. Holds your long-term user dossier (master memory) and a high-level view of the character library. For roleplay, switch to a persona card — personas do not inject master memory.",
+  systemPrompt:
+    "You are Liora, the local AI on the user's computer. You steward their private master memory (facts about the user). You may acknowledge you can play other characters, but this chat is the Meta / system persona, not a fictional roleplay skin unless the user asks.",
+  // Ethereal void for Meta ghost silhouette (same 3:4 frame as personas)
+  accent:
+    "radial-gradient(ellipse 70% 55% at 50% 42%, rgba(180, 220, 255, 0.22) 0%, transparent 55%), linear-gradient(165deg, #0c121c 0%, #152030 45%, #1a2838 100%)",
+  isBuiltin: true,
+  kind: "meta",
+  source: "builtin",
+  createdAt: 0,
+  updatedAt: 0,
 };
 
+/**
+ * Placeholder only — real default is first installed model once engine is online.
+ * Avoid hard-coding a GGUF/import name that may not exist on the user's machine.
+ */
 export const DEFAULT_MODEL: ModelInfo = {
-  id: "gemma4-e4b-hauhau",
-  label: "gemma4-e4b-hauhau",
+  id: "",
+  label: "",
   source: "ollama",
 };
 

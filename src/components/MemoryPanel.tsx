@@ -8,6 +8,9 @@ interface Props {
   episodesCount: number;
   chunksCount: number;
   pipelineBusy: boolean;
+  /** Meta shows master dossier; persona shows that card only */
+  isMeta: boolean;
+  characterName: string;
   onClose: () => void;
   onEdit: (id: string, object: string) => void;
   onDelete: (id: string) => void;
@@ -22,6 +25,8 @@ export function MemoryPanel({
   episodesCount,
   chunksCount,
   pipelineBusy,
+  isMeta,
+  characterName,
   onClose,
   onEdit,
   onDelete,
@@ -35,6 +40,9 @@ export function MemoryPanel({
     L4: memories.filter((m) => m.layer === "L4"),
     L5: memories.filter((m) => m.layer === "L5"),
   };
+  const scopeHint = isMeta
+    ? dict.memoryScopeMeta
+    : dict.memoryScopePersona.replace("{name}", characterName);
 
   return (
     <div className="memory-drawer-backdrop" onClick={onClose}>
@@ -61,6 +69,7 @@ export function MemoryPanel({
           {pipelineBusy && <span className="badge">{dict.memoryWorking}</span>}
         </div>
 
+        <p className="muted small pad-x">{scopeHint}</p>
         <p className="muted small pad-x">{dict.memoryPanelHint}</p>
 
         <div className="memory-actions pad-x">

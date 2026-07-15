@@ -5,6 +5,7 @@ import type {
   SessionMemoryCursor,
   TextChunk,
 } from "../../types/memory";
+import { memoryDedupeKey } from "./scope";
 
 const KEY = "liora.memory.v1";
 
@@ -23,7 +24,7 @@ export function loadMemoryStore(): MemoryStoreData {
     if (!raw) return empty();
     const parsed = JSON.parse(raw) as MemoryStoreData;
     if (parsed?.version !== 1) return empty();
-    return {
+    const base = {
       ...empty(),
       ...parsed,
       memories: parsed.memories ?? [],
@@ -32,6 +33,8 @@ export function loadMemoryStore(): MemoryStoreData {
       cursors: parsed.cursors ?? [],
       recentUpdates: parsed.recentUpdates ?? [],
     };
+    // Lazy import avoided: migrate inline via dynamic to prevent cycles — call site migrates
+    return base;
   } catch {
     return empty();
   }
@@ -159,11 +162,9 @@ export function mergeMemory(
   data: MemoryStoreData,
   item: MemoryItem,
 ): { data: MemoryStoreData; changed: boolean; label: string } {
-  const key = `${item.subject}::${item.predicate}`.toLowerCase();
+  const key = memoryDedupeKey(item);
   const existing = data.memories.find(
-    (m) =>
-      m.status === "active" &&
-      `${m.subject}::${m.predicate}`.toLowerCase() === key,
+    (m) => m.status === "active" && memoryDedupeKey(m) === key,
   );
 
   if (existing) {
