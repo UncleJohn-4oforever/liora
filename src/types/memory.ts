@@ -15,7 +15,7 @@ export type MemoryType =
  * - master: user dossier — only Meta (本机 AI) injects
  * - character: private to one character card (no cross-persona bleed)
  */
-export type MemoryScope = "master" | "character";
+export type MemoryScope = "master" | "character" | "orphan";
 
 export interface MemoryItem {
   id: string;
@@ -90,4 +90,6 @@ export interface MemoryStoreData {
   recentUpdates: { id: string; label: string; at: number }[];
   /** R3: one-time scope migration completed */
   scopeMigrated?: boolean;
+  /** Ownership/access-policy migration. Current value: 2. */
+  scopeVersion?: number;
 }

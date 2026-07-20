@@ -70,11 +70,6 @@ export const en: Dict = {
   rememberThis: "Remember this",
   rememberInput: "Remember input",
   rememberWorking: "Saving memory…",
-  sensitiveTitle: "Possibly sensitive",
-  sensitiveHint:
-    "This may include contact/address/health/finance info. Confirm to save locally, or cancel.",
-  sensitiveTags: "Tags",
-  confirmSaveMemory: "Save memory",
   cancel: "Cancel",
   openSettings: "Settings",
   settingsTitle: "Settings & backup",
@@ -188,13 +183,13 @@ export const en: Dict = {
   modelNoneHint: "No local models yet. Open Get models to download one.",
   modelImportTitle: "Import local GGUF",
   modelImportHint:
-    "If you downloaded a .gguf (e.g. from Hugging Face), import it into Ollama here. It will appear in the model list.",
+    "Pick the main language .gguf. If an mmproj (vision projector) sits in the same folder, Liora attaches it for vision. It will appear in the model list.",
   modelImportPick: "Browse…",
   modelImportPath: "File path",
   modelImportName: "Model name",
   modelImportNameHint: "Letters, numbers, . _ - ; optional :tag, e.g. my-gemma:q5",
   modelImportRun: "Import",
-  modelImportWorking: "Importing (large files may take minutes)…",
+  modelImportWorking: "Importing (with vision module may take longer)…",
   modelImportSuccess: "Imported {m}. Select it in the top model list.",
   modelImportFailed: "Import failed",
   modelImportErrNotFound: "File not found. Pick again.",
@@ -202,6 +197,14 @@ export const en: Dict = {
   modelImportErrName: "Invalid name: use a simple alphanumeric name.",
   modelImportErrOllama: "Ollama not found. Install and start the local engine.",
   modelImportErrDesktop: "Local GGUF import requires the desktop app.",
+  modelImportErrMmproj:
+    "That file looks like a vision projector (mmproj). Pick the main language .gguf; mmproj in the same folder is attached automatically.",
+  modelImportVisionAttached:
+    "Vision projector (mmproj) attached — model may support images after import.",
+  modelImportVisionMissed:
+    "mmproj was found but Ollama multimodal packaging failed; imported as text-only. Upgrade Ollama and retry, or pull an official vision model.",
+  modelImportHintMmproj:
+    "Tip: keep the main .gguf and mmproj-*.gguf in the same folder; select the main file only.",
   modelImportNeedEngine: "Start the local engine before importing if possible.",
   modelSwitchAsk: "Switch to this model when done?",
   modelSwitchYes: "Switched to {m}.",
@@ -301,8 +304,27 @@ export const en: Dict = {
   characterAvatarErrSize: "Image too large (max ~12MB). Compress and retry.",
   characterAvatarErrLoad: "Could not read that image. Try another file.",
   characterAvatarFailed: "Portrait processing failed",
+  attachImage: "Attach image",
+  attachImageHint:
+    "Images are described locally then discarded from history — only the text summary is kept. Paste screenshots too.",
+  clearAttachedImage: "Remove image",
+  visionWorking: "Reading image…",
+  visionNoModel:
+    "No Ollama model reports vision capability. A text chat model cannot read images; multimodal in LM Studio does not mean this Ollama GGUF supports images.",
+  visionFailed: "Image read failed",
+  visionErrType: "Please choose an image (JPG / PNG / WebP / GIF).",
+  visionErrSize: "Image too large (max ~16MB). Compress and retry.",
+  visionErrLoad: "Could not read that image. Try another file.",
+  visionDescribePortrait: "Describe from art",
+  visionDescribePortraitWorking: "Describing portrait…",
+  visionDescribePortraitOk: "Draft description filled from art — edit as needed",
+  visionDescribePortraitBusy:
+    "Chat is generating. Try describe-from-art after it finishes.",
   memoryScopeMeta:
-    "Meta (local AI): this list and chat injection show master user dossier only. Persona-private memories stay out.",
+    "Meta (local AI and memory steward): audit the master dossier, unclaimed memories, and persona memories here. Chat uses the catalog by default and retrieves persona detail only when relevant.",
   memoryScopePersona:
-    "Character “{name}”: only this character’s private memories. Master dossier is injected only under Meta (Liora).",
+    "Character “{name}”: shared user profile plus this character’s private memory; other personas’ experiences stay isolated.",
+  memoryOwner: "Owner",
+  memoryOwnerMaster: "Master user dossier",
+  memoryOwnerOrphan: "Unclaimed memory",
 };

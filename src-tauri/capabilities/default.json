@@ -12,9 +12,7 @@
         { "url": "http://127.0.0.1:11434" },
         { "url": "http://127.0.0.1:11434/**" },
         { "url": "http://localhost:11434" },
-        { "url": "http://localhost:11434/**" },
-        { "url": "http://127.0.0.1:*/*" },
-        { "url": "http://localhost:*/*" }
+        { "url": "http://localhost:11434/**" }
       ]
     }
   ]

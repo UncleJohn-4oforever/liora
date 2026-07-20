@@ -1,4 +1,5 @@
 import { OLLAMA_BASE } from "../data/defaults";
+import { OLLAMA_KEEP_ALIVE } from "./engine/activity";
 import { ollamaFetch } from "./engine/ollamaFetch";
 import { invokeTauri, isTauri } from "./engine/platform";
 import type { Message } from "../types";
@@ -81,6 +82,52 @@ export async function checkOllama(): Promise<{
   }
 }
 
+/**
+ * Force Ollama to load weights into VRAM (or confirm already loaded).
+ * Used after model switch / pull so users see "Loading…" in the top bar.
+ */
+export async function warmModel(
+  model: string,
+  options?: { signal?: AbortSignal; numCtx?: number },
+): Promise<{ ok: boolean; error?: string }> {
+  const name = model.trim();
+  if (!name) return { ok: false, error: "empty_model" };
+  try {
+    const res = await ollamaFetch(`${OLLAMA_BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: options?.signal ?? AbortSignal.timeout(180_000),
+      body: JSON.stringify({
+        model: name,
+        messages: [{ role: "user", content: "." }],
+        stream: false,
+        // Keep resident so the next user turn does not re-load weights
+        keep_alive: OLLAMA_KEEP_ALIVE,
+        options: {
+          // Match chat num_ctx so warm doesn't pin a different KV size
+          num_ctx: options?.numCtx ?? 8192,
+          num_predict: 1,
+          temperature: 0,
+        },
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      return {
+        ok: false,
+        error: `Ollama HTTP ${res.status}${t ? `: ${t.slice(0, 120)}` : ""}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    if (options?.signal?.aborted) return { ok: false, error: "aborted" };
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
 export function toOllamaMessages(
   history: Message[],
   systemPrompt?: string,
@@ -108,6 +155,9 @@ function makeChatBody(
     model,
     messages,
     stream: true,
+    // Critical: without this, Ollama may unload after default ~5m (or sooner),
+    // making every reply look like a full model reload.
+    keep_alive: OLLAMA_KEEP_ALIVE,
     options: {
       num_ctx: genOptions?.num_ctx ?? 8192,
       num_predict: genOptions?.num_predict ?? 6144,

@@ -33,6 +33,8 @@ interface Props {
    * @param switchTo — user chose (before start) to make it the current model
    */
   onPulled: (modelId: string, switchTo: boolean) => void;
+  /** Mirror pull progress on the top engine status bar */
+  onPullProgress?: (modelId: string, progress: PullProgress | null) => void;
 }
 
 type PendingAction =
@@ -47,6 +49,7 @@ export function ModelHub({
   installedModels,
   onClose,
   onPulled,
+  onPullProgress,
 }: Props) {
   const [ramGb, setRamGb] = useState<number | null>(null);
   const [custom, setCustom] = useState("");
@@ -110,9 +113,18 @@ export function ModelHub({
     setPullingId(modelId);
     const ac = new AbortController();
     setAbort(ac);
+    onPullProgress?.(modelId, {
+      status: dict.modelHubStarting,
+      percent: 0,
+      completed: null,
+      total: null,
+    });
     const result = await pullModel(modelId, {
       signal: ac.signal,
-      onProgress: (p) => setProgress(p),
+      onProgress: (p) => {
+        setProgress(p);
+        onPullProgress?.(modelId, p);
+      },
     });
     setAbort(null);
     setPullingId(null);
@@ -124,6 +136,7 @@ export function ModelHub({
         completed: null,
         total: null,
       });
+      onPullProgress?.(modelId, null);
       onPulled(modelId, switchTo);
       setMsg(
         switchTo
@@ -133,8 +146,10 @@ export function ModelHub({
     } else if (result.error === "aborted") {
       setMsg(dict.modelHubCancelled);
       setProgress(null);
+      onPullProgress?.(modelId, null);
     } else {
       setError(result.error ?? dict.modelHubFailed);
+      onPullProgress?.(modelId, null);
     }
   };
 
@@ -186,11 +201,17 @@ export function ModelHub({
       if (result.ok) {
         const short = shortModelName(result.name);
         onPulled(result.name, switchTo);
-        setMsg(
-          switchTo
-            ? dict.modelSwitchYes.replace("{m}", short)
-            : dict.modelSwitchNo.replace("{m}", short),
-        );
+        const base = switchTo
+          ? dict.modelSwitchYes.replace("{m}", short)
+          : dict.modelSwitchNo.replace("{m}", short);
+        let extra = "";
+        if (result.visionAttached) {
+          extra = `\n${dict.modelImportVisionAttached}`;
+        } else if (result.mmprojPath) {
+          // Found projector but fell back to text-only create
+          extra = `\n${dict.modelImportVisionMissed}`;
+        }
+        setMsg(base + extra);
       } else {
         setError(
           mapImportError(result.error, dict) +
@@ -283,6 +304,7 @@ export function ModelHub({
         <section className="settings-section">
           <h3>{dict.modelImportTitle}</h3>
           <p className="muted small pad-x">{dict.modelImportHint}</p>
+          <p className="muted small pad-x">{dict.modelImportHintMmproj}</p>
           <div className="pad-x model-import-block">
             <label className="label">{dict.modelImportPath}</label>
             <div className="settings-model-row">

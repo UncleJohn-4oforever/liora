@@ -110,16 +110,23 @@ function mergeMemory(
     const prev = curMap.get(c.sessionId);
     if (!prev || c.updatedAt >= prev.updatedAt) curMap.set(c.sessionId, c);
   }
+  const updateMap = new Map(
+    [...(incoming.recentUpdates ?? []), ...local.recentUpdates].map((update) => [
+      update.id,
+      update,
+    ]),
+  );
   return {
     version: 1,
     memories: [...memMap.values()],
     episodes: [...epMap.values()].slice(-500),
     chunks: [...chMap.values()].slice(-800),
     cursors: [...curMap.values()],
-    recentUpdates: [
-      ...(incoming.recentUpdates ?? []),
-      ...local.recentUpdates,
-    ].slice(0, 20),
+    recentUpdates: [...updateMap.values()]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 20),
+    scopeMigrated: Boolean(local.scopeMigrated && incoming.scopeMigrated),
+    scopeVersion: Math.min(local.scopeVersion ?? 1, incoming.scopeVersion ?? 1),
   };
 }
 
@@ -169,6 +176,8 @@ export function applyBackup(
         chunks: backup.memory.chunks ?? [],
         cursors: backup.memory.cursors ?? [],
         recentUpdates: backup.memory.recentUpdates ?? [],
+        scopeMigrated: backup.memory.scopeMigrated,
+        scopeVersion: backup.memory.scopeVersion,
       },
       // Old backups without characters: keep local library
       characters: backup.characters?.length

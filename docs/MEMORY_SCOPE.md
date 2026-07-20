@@ -1,25 +1,26 @@
-# Memory scope R3
+# Memory scope R4 — Meta steward
 
 ## Rules
 
 | Scope | Who writes | Who injects |
 |-------|------------|-------------|
-| **master** | Meta (builtin Liora / `kind: meta`) chat extract & explicit remember | Meta only |
-| **character** | Persona chats | That `characterId` only |
+| **master** | Meta chat extract & explicit remember | Meta + personas |
+| **character** | Persona chats | Owner in full; Meta catalog/search when relevant |
+| **orphan** | Migration/import when ownership is unknown | Meta, which reviews and assigns ownership |
 
-Episodes / cold chunks are tagged with the session’s `characterId` (including Meta’s id). Cross-session episode inject stays within the same character.
+Episodes / cold chunks remain tagged with the session’s `characterId`. Personas stay isolated. Meta can retrieve relevant episode summaries across personas, but cold detail chunks remain character-scoped.
 
 ## Migration (one-shot)
 
-Pre-R3 items without `scope`:
+Pre-R4 items are normalized as follows:
 
 - L3 identity predicates (`name`, `has_pet`, …) → **master**
-- Everything else → **character** + default character id (`char_default_assistant`)
+- Items with a valid `characterId` → **character**
+- Items without an owner → **orphan** (identity facts may still become **master**)
 
-Flag: `memory.scopeMigrated`.
+Flags: `memory.scopeMigrated`, `memory.scopeVersion = 2`.
 
 ## Not yet
 
-- Meta “character index” (list of roles played)
 - L6 state machine for 2D actions
-- Optional “persona may read master” switch
+- Optional visibility controls, if future users ask for them; controls should live directly beside each memory

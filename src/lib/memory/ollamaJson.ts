@@ -1,4 +1,5 @@
 import { OLLAMA_BASE } from "../../data/defaults";
+import { OLLAMA_KEEP_ALIVE } from "../engine/activity";
 import { ollamaFetch } from "../engine/ollamaFetch";
 
 /** Non-streaming chat; returns assistant text (thinking stripped lightly). */
@@ -7,6 +8,8 @@ export async function ollamaComplete(options: {
   system?: string;
   prompt: string;
   numPredict?: number;
+  /** Must match chat num_ctx or Ollama reallocates KV cache (feels like reload). */
+  numCtx?: number;
   signal?: AbortSignal;
 }): Promise<string> {
   const messages: { role: string; content: string }[] = [];
@@ -21,8 +24,10 @@ export async function ollamaComplete(options: {
       messages,
       stream: false,
       think: false,
+      keep_alive: OLLAMA_KEEP_ALIVE,
       options: {
-        num_ctx: 4096,
+        // Same default as main chat (8K) — mismatched num_ctx thrashs VRAM
+        num_ctx: options.numCtx ?? 8192,
         num_predict: options.numPredict ?? 800,
         temperature: 0.2,
       },

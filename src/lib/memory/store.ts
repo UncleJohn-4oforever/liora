@@ -101,6 +101,32 @@ export function updateMemoryObject(
   };
 }
 
+export function updateMemoryOwnership(
+  data: MemoryStoreData,
+  id: string,
+  target: { scope: "master" | "character" | "orphan"; characterId?: string },
+): MemoryStoreData {
+  return {
+    ...data,
+    memories: data.memories.map((memory) => {
+      if (memory.id !== id) return memory;
+      if (target.scope === "master") {
+        return { ...memory, scope: "master", characterId: undefined, updatedAt: Date.now() };
+      }
+      if (target.scope === "orphan") {
+        return { ...memory, scope: "orphan", characterId: undefined, updatedAt: Date.now() };
+      }
+      if (!target.characterId?.trim()) return memory;
+      return {
+        ...memory,
+        scope: "character",
+        characterId: target.characterId.trim(),
+        updatedAt: Date.now(),
+      };
+    }),
+  };
+}
+
 export function clearAllMemories(data: MemoryStoreData): MemoryStoreData {
   return {
     ...data,

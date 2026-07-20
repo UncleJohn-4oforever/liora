@@ -18,6 +18,7 @@ export async function maybeMesoMerge(options: {
   sessionId: string;
   model: string;
   characterId?: string;
+  numCtx?: number;
   signal?: AbortSignal;
 }): Promise<{
   store: MemoryStoreData;
@@ -25,6 +26,7 @@ export async function maybeMesoMerge(options: {
   label?: string;
 }> {
   const { sessionId, model, signal } = options;
+  const numCtx = options.numCtx ?? 8192;
   const characterId =
     options.characterId ||
     options.store.episodes.find((e) => e.sessionId === sessionId)
@@ -45,7 +47,15 @@ export async function maybeMesoMerge(options: {
   const fromMsg = Math.min(...batch.map((e) => e.fromMsg));
   const toMsg = Math.max(...batch.map((e) => e.toMsg));
 
-  let meso = await tryLlmMeso(batch, sessionId, fromMsg, toMsg, model, signal);
+  let meso = await tryLlmMeso(
+    batch,
+    sessionId,
+    fromMsg,
+    toMsg,
+    model,
+    signal,
+    numCtx,
+  );
   if (!meso) {
     meso = heuristicMeso(batch, sessionId, fromMsg, toMsg);
   }
@@ -125,6 +135,7 @@ async function tryLlmMeso(
   toMsg: number,
   model: string,
   signal?: AbortSignal,
+  numCtx = 8192,
 ): Promise<EpisodeSummary | null> {
   const bullets = batch
     .map(
@@ -145,6 +156,7 @@ async function tryLlmMeso(
       system,
       prompt: `Merge these micro summaries:\n${bullets}\n\nJSON:`,
       numPredict: 500,
+      numCtx,
       signal,
     });
     const parsed = parseJsonLoose<{

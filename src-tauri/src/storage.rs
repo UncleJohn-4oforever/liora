@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -114,15 +115,26 @@ pub fn resolve_data_dir() -> PathBuf {
     p
 }
 
-fn file_path(name: &str) -> Result<PathBuf, String> {
-    let safe = match name {
+fn store_filename(name: &str) -> Result<&'static str, String> {
+    Ok(match name {
         "sessions" | "sessions.json" => "sessions.json",
         "memory" | "memory.json" => "memory.json",
         "settings" | "settings.json" => "settings.json",
         "characters" | "characters.json" => "characters.json",
         _ => return Err(format!("unknown_store: {name}")),
-    };
-    Ok(resolve_data_dir().join(safe))
+    })
+}
+
+fn file_path(name: &str) -> Result<PathBuf, String> {
+    Ok(resolve_data_dir().join(store_filename(name)?))
+}
+
+fn sync_written_file(path: &Path) -> Result<(), String> {
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| format!("sync tmp: {e}"))
 }
 
 pub fn read_store_json(name: &str) -> Result<Option<String>, String> {
@@ -131,10 +143,23 @@ pub fn read_store_json(name: &str) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let s = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    Ok(Some(s))
+    if serde_json::from_str::<serde_json::Value>(&s).is_ok() {
+        return Ok(Some(s));
+    }
+
+    // A previous process or disk failure may have interrupted a write. Prefer
+    // the last known-good copy instead of turning a damaged file into empty UI.
+    let backup = path.with_extension("json.bak");
+    if let Ok(previous) = fs::read_to_string(&backup) {
+        if serde_json::from_str::<serde_json::Value>(&previous).is_ok() {
+            return Ok(Some(previous));
+        }
+    }
+    Err(format!("invalid_json: {}", path.display()))
 }
 
 pub fn write_store_json(name: &str, content: &str) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(content).map_err(|e| format!("invalid_json: {e}"))?;
     let path = file_path(name)?;
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
@@ -142,6 +167,11 @@ pub fn write_store_json(name: &str, content: &str) -> Result<(), String> {
     // Atomic-ish write
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, content).map_err(|e| format!("write tmp: {e}"))?;
+    sync_written_file(&tmp)?;
+    if path.is_file() {
+        let backup = path.with_extension("json.bak");
+        fs::copy(&path, &backup).map_err(|e| format!("backup current store: {e}"))?;
+    }
     if let Err(e) = fs::rename(&tmp, &path) {
         fs::copy(&tmp, &path).map_err(|e2| format!("copy after rename fail ({e}): {e2}"))?;
         let _ = fs::remove_file(&tmp);
@@ -158,10 +188,7 @@ pub fn storage_info() -> StorageInfo {
     for f in FILES {
         let p = data.join(f);
         let (exists, size) = if p.is_file() {
-            (
-                true,
-                fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
-            )
+            (true, fs::metadata(&p).map(|m| m.len()).unwrap_or(0))
         } else {
             (false, 0)
         };
@@ -288,6 +315,36 @@ pub fn open_config_dir() -> Result<(), String> {
     let root = app_root();
     ensure_dir(&root)?;
     open_path_in_explorer(&root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{store_filename, sync_written_file};
+    use std::fs;
+
+    #[test]
+    fn store_names_are_strictly_allowlisted() {
+        assert_eq!(store_filename("sessions").unwrap(), "sessions.json");
+        assert_eq!(store_filename("memory.json").unwrap(), "memory.json");
+        assert!(store_filename("../settings").is_err());
+        assert!(store_filename("arbitrary.json").is_err());
+    }
+
+    #[test]
+    fn written_temp_file_can_be_flushed() {
+        let path = std::env::temp_dir().join(format!(
+            "liora-storage-sync-{}-{}.json.tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, br#"{"ok":true}"#).unwrap();
+        let result = sync_written_file(&path);
+        let _ = fs::remove_file(&path);
+        assert!(result.is_ok(), "{result:?}");
+    }
 }
 
 fn open_path_in_explorer(path: &Path) -> Result<(), String> {

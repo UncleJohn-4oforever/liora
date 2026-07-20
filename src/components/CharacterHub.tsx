@@ -14,6 +14,7 @@ import {
 import type { CharacterCard, Locale } from "../types";
 import { CharacterPortrait } from "./CharacterPortrait";
 import { isMetaCharacter } from "../lib/memory/scope";
+import { visionInstallHint } from "../lib/vision";
 
 interface Props {
   dict: Dict;
@@ -23,6 +24,9 @@ interface Props {
   activeCharacterId: string;
   defaultCharacterId: string;
   generating: boolean;
+  ollamaOnline?: boolean;
+  /** Optional vision → text for portrait (fills description draft). */
+  onDescribePortrait?: (dataUrl: string) => Promise<string>;
   onClose: () => void;
   onSelectCharacter: (id: string) => void;
   onSetDefaultCharacter: (id: string) => void;
@@ -41,6 +45,8 @@ export function CharacterHub({
   activeCharacterId,
   defaultCharacterId,
   generating,
+  ollamaOnline = false,
+  onDescribePortrait,
   onClose,
   onSelectCharacter,
   onSetDefaultCharacter,
@@ -58,6 +64,7 @@ export function CharacterHub({
   /** Draft portrait (data URL); null = none; undefined only internal */
   const [formAvatar, setFormAvatar] = useState<string | undefined>(undefined);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [describeBusy, setDescribeBusy] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -71,6 +78,7 @@ export function CharacterHub({
       setErr(null);
       setFormAvatar(undefined);
       setAvatarBusy(false);
+      setDescribeBusy(false);
     }
   }, [open]);
 
@@ -166,6 +174,38 @@ export function CharacterHub({
       setErr(mapAvatarError(code, dict));
     } finally {
       setAvatarBusy(false);
+    }
+  };
+
+  const onDescribeFromArt = async () => {
+    if (!formAvatar || !onDescribePortrait) return;
+    if (generating) {
+      setErr(dict.visionDescribePortraitBusy);
+      return;
+    }
+    setErr(null);
+    setDescribeBusy(true);
+    try {
+      const desc = await onDescribePortrait(formAvatar);
+      if (desc.trim()) {
+        // Intentional button: fill description draft (user can still edit)
+        setFormDesc(desc.trim());
+        setMsg(dict.visionDescribePortraitOk);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "busy_generating") {
+        setErr(dict.visionDescribePortraitBusy);
+      } else if (
+        msg === "vision_no_model" ||
+        /vision_not_multimodal|vision_model_not_found|multimodal/i.test(msg)
+      ) {
+        setErr(`${dict.visionNoModel}\n${visionInstallHint(locale)}`);
+      } else {
+        setErr(`${dict.visionFailed}: ${msg}`);
+      }
+    } finally {
+      setDescribeBusy(false);
     }
   };
 
@@ -326,10 +366,28 @@ export function CharacterHub({
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
-                      disabled={avatarBusy}
+                      disabled={avatarBusy || describeBusy}
                       onClick={() => setFormAvatar(undefined)}
                     >
                       {dict.characterAvatarClear}
+                    </button>
+                  )}
+                  {formAvatar && onDescribePortrait && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={
+                        avatarBusy ||
+                        describeBusy ||
+                        generating ||
+                        !ollamaOnline
+                      }
+                      onClick={() => void onDescribeFromArt()}
+                      title={dict.attachImageHint}
+                    >
+                      {describeBusy
+                        ? dict.visionDescribePortraitWorking
+                        : dict.visionDescribePortrait}
                     </button>
                   )}
                 </div>

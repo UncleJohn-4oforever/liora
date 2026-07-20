@@ -11,17 +11,10 @@ import { ollamaComplete, parseJsonLoose } from "./ollamaJson";
 import { stampMemoryAtom, writeTargetForCharacter } from "./scope";
 import { mergeMemory } from "./store";
 import { scoreSpecificity } from "./specificity";
-import { detectSensitivity } from "./sensitive";
 
 export interface RememberResult {
   store: MemoryStoreData;
   labels: string[];
-  pendingSensitive?: {
-    text: string;
-    tags: string[];
-    /** Pre-built items to commit after user confirms */
-    items: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">[];
-  };
   error?: string;
 }
 
@@ -99,8 +92,6 @@ export async function rememberExplicitText(options: {
   text: string;
   model: string;
   character?: CharacterCard | null;
-  /** If true, skip confirm even when sensitive (user already confirmed). */
-  confirmedSensitive?: boolean;
   signal?: AbortSignal;
 }): Promise<RememberResult> {
   const text = options.text.trim();
@@ -108,8 +99,6 @@ export async function rememberExplicitText(options: {
   const writeTarget = writeTargetForCharacter(
     options.character ?? DEFAULT_CHARACTER,
   );
-
-  const sens = detectSensitivity(text);
 
   // Build candidates via heuristics first (fast, offline)
   const fakeTranscript = `[0] User: ${text}`;
@@ -182,33 +171,6 @@ export async function rememberExplicitText(options: {
     return true;
   });
 
-  if (sens.sensitive && !options.confirmedSensitive) {
-    return {
-      store: options.store,
-      labels: [],
-      pendingSensitive: {
-        text,
-        tags: sens.tags,
-        items: rawItems.map(({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest),
-      },
-    };
-  }
-
   const committed = commitItems(options.store, rawItems);
   return committed;
-}
-
-export function commitPendingSensitive(
-  store: MemoryStoreData,
-  items: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">[],
-): { store: MemoryStoreData; labels: string[] } {
-  const full: MemoryItem[] = items.map((it) => ({
-    ...it,
-    id: uid("mem"),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    source: "user",
-    status: "active",
-  }));
-  return commitItems(store, full);
 }

@@ -126,6 +126,27 @@ textarea {
   border: 1px solid var(--border);
   font-size: 12px;
   color: var(--muted);
+  max-width: min(420px, 46vw);
+}
+
+.status-pill-busy {
+  border-color: rgba(212, 160, 23, 0.45);
+  background: rgba(212, 160, 23, 0.08);
+  min-width: 160px;
+}
+
+.status-pill-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.status-pill-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-pill .dot {
@@ -133,6 +154,7 @@ textarea {
   height: 8px;
   border-radius: 50%;
   background: var(--muted);
+  flex-shrink: 0;
 }
 
 .status-online .dot,
@@ -150,8 +172,52 @@ textarea {
 
 .status-unknown .dot,
 .status-engine-checking .dot,
-.status-engine-starting .dot {
+.status-engine-starting .dot,
+.status-engine-busy .dot {
   background: var(--warn);
+  box-shadow: 0 0 8px rgba(212, 160, 23, 0.45);
+  animation: status-dot-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes status-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.engine-activity-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  width: 100%;
+  min-width: 100px;
+}
+
+.engine-activity-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d4a017, #f0c14b);
+  transition: width 0.25s ease;
+  min-width: 4px;
+}
+
+.engine-activity-fill.indeterminate {
+  width: 40%;
+  animation: engine-bar-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes engine-bar-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
 
 .engine-banner {
@@ -252,7 +318,7 @@ textarea {
   min-height: 0;
   display: grid;
   /* Right rail 320px: room for 3:4 hero portrait (see docs/CHARACTER_VISUAL.md) */
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 230px minmax(0, 1fr) 340px;
   gap: 0;
 }
 
@@ -1270,6 +1336,20 @@ textarea {
   flex-shrink: 0;
 }
 
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.composer-toolbar .is-active {
+  color: #d5e4ff;
+  border-color: rgba(91, 141, 239, 0.5);
+  background: rgba(91, 141, 239, 0.12);
+}
+
 .composer-prefs {
   display: flex;
   flex-wrap: wrap;
@@ -1554,7 +1634,56 @@ textarea {
 
 .composer-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-actions-left,
+.composer-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-actions-right {
+  margin-left: auto;
+}
+
+.composer-attach-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(152, 193, 217, 0.22);
+  background: rgba(22, 30, 42, 0.9);
+}
+
+.composer-attach-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+
+.composer-attach-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-attach-meta .small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* Character — fixed 3:4 frames (docs/CHARACTER_VISUAL.md) */
@@ -1597,6 +1726,26 @@ textarea {
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* Stable stage boundary: CharacterPortrait can later be replaced by a
+   Live2D canvas without changing the surrounding layout. */
+.character-live-stage {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 30%, rgba(91, 141, 239, 0.12), transparent 68%);
+}
+
+.character-live-stage::after {
+  content: "";
+  position: absolute;
+  inset: auto 12% 3% 12%;
+  height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.28), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
 .character-hero-stage:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
@@ -1617,6 +1766,30 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   background: #121820;
+}
+
+.character-runtime-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+}
+
+.character-runtime-stage .char-portrait {
+  width: 100%;
+  height: 100%;
+}
+
+.character-runtime-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.character-runtime-stage:not([data-live]) .character-runtime-canvas {
+  visibility: hidden;
 }
 
 .char-portrait-hero {
@@ -2159,9 +2332,9 @@ textarea {
 }
 
 /* Responsive */
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .workspace {
-    grid-template-columns: 220px minmax(0, 1fr) 300px;
+    grid-template-columns: 210px minmax(0, 1fr) 310px;
   }
 }
 

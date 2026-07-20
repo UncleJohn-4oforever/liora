@@ -4,6 +4,10 @@ export interface ImportGgufResult {
   ok: boolean;
   name: string;
   path: string;
+  /** Auto-detected vision projector path (same folder), if any. */
+  mmprojPath?: string | null;
+  /** True when main GGUF + mmproj were staged for Ollama multimodal create. */
+  visionAttached?: boolean;
   error?: string | null;
   log?: string | null;
 }
@@ -77,6 +81,7 @@ export function mapImportError(
     modelImportErrName: string;
     modelImportErrOllama: string;
     modelImportErrDesktop: string;
+    modelImportErrMmproj: string;
     modelImportFailed: string;
   },
 ): string {
@@ -85,6 +90,8 @@ export function mapImportError(
       return dict.modelImportErrNotFound;
     case "not_gguf":
       return dict.modelImportErrNotGguf;
+    case "picked_mmproj":
+      return dict.modelImportErrMmproj;
     case "empty_name":
     case "invalid_name":
     case "name_too_long":

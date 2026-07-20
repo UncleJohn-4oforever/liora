@@ -13,6 +13,7 @@ const empty = (): MemoryStoreData => ({
   cursors: [],
   recentUpdates: [],
   scopeMigrated: true,
+  scopeVersion: 2,
 });
 
 export async function loadMemoryStoreFromDb(): Promise<MemoryStoreData> {
@@ -28,7 +29,7 @@ export async function loadMemoryStoreFromDb(): Promise<MemoryStoreData> {
     recentUpdates: data.recentUpdates ?? [],
   };
   const migrated = migrateMemoryStoreScopes(base, DEFAULT_CHARACTER.id);
-  if (!data.scopeMigrated) {
+  if (!data.scopeMigrated || (data.scopeVersion ?? 1) < 2) {
     // Persist migration so flags stick
     try {
       await kvSetJson(KEY, migrated);

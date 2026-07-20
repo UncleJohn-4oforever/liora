@@ -1,18 +1,35 @@
-import { CharacterHub } from "./components/CharacterHub";
+import { lazy, Suspense } from "react";
 import { CharacterPanel } from "./components/CharacterPanel";
 import { ChatPanel } from "./components/ChatPanel";
 import { EngineBanner } from "./components/EngineBanner";
 import { EngineGuide } from "./components/EngineGuide";
-import { MemoryPanel } from "./components/MemoryPanel";
 import { MemoryToast } from "./components/MemoryToast";
-import { SensitiveConfirm } from "./components/SensitiveConfirm";
 import { SessionList } from "./components/SessionList";
-import { ModelHub } from "./components/ModelHub";
 import { OnboardingWizard } from "./components/OnboardingWizard";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { TopBar } from "./components/TopBar";
 import { useLioraState } from "./hooks/useLioraState";
 import "./App.css";
+
+const MemoryPanel = lazy(() =>
+  import("./components/MemoryPanel").then((module) => ({
+    default: module.MemoryPanel,
+  })),
+);
+const SettingsPanel = lazy(() =>
+  import("./components/SettingsPanel").then((module) => ({
+    default: module.SettingsPanel,
+  })),
+);
+const ModelHub = lazy(() =>
+  import("./components/ModelHub").then((module) => ({
+    default: module.ModelHub,
+  })),
+);
+const CharacterHub = lazy(() =>
+  import("./components/CharacterHub").then((module) => ({
+    default: module.CharacterHub,
+  })),
+);
 
 export default function App() {
   const state = useLioraState();
@@ -61,11 +78,10 @@ export default function App() {
     <div className="app">
       <TopBar
         dict={state.dict}
-        locale={state.settings.locale}
         engine={state.engine}
+        engineActivity={state.engineActivity}
         models={state.ollamaModels}
         currentModelId={currentModel}
-        onLocale={state.setLocale}
         onOpenSettings={() => state.setSettingsOpen(true)}
         onModelChange={state.setSessionModel}
         onEngineStart={() => void state.engineStart()}
@@ -83,6 +99,13 @@ export default function App() {
       {state.bootError && (
         <div className="banner-error boot-banner">
           DB: {state.bootError} (fallback mode)
+        </div>
+      )}
+      {state.persistenceError && (
+        <div className="banner-error boot-banner" role="alert">
+          {state.settings.locale === "zh"
+            ? `数据尚未保存到桌面存储：${state.persistenceError}`
+            : `Data was not saved to desktop storage: ${state.persistenceError}`}
         </div>
       )}
       {state.ollamaOnline && state.ollamaModels.length === 0 && (
@@ -124,7 +147,6 @@ export default function App() {
           input={state.input}
           generating={state.generating}
           lastError={state.lastError}
-          modelLabel={currentModel}
           ollamaOnline={state.ollamaOnline}
           modelCount={state.ollamaModels.length}
           memoryEnabled={state.settings.memoryEnabled}
@@ -133,11 +155,15 @@ export default function App() {
           tokenUsage={state.tokenUsage}
           usageCtxLimit={state.usageCtxLimit}
           assembledBudget={state.assembledBudget}
+          pendingImage={state.pendingImage}
+          attachBusy={state.attachBusy}
           onInput={state.setInput}
           onSend={() => void state.send()}
           onStop={state.stop}
           onRememberText={(text) => void state.rememberText(text)}
           onChangeSettings={state.patchSettings}
+          onAttachImage={(file) => void state.attachImageFile(file)}
+          onClearPendingImage={state.clearPendingImage}
           onOpenModelHub={() => state.setModelHubOpen(true)}
           onStartEngine={() => void state.engineStart()}
         />
@@ -146,12 +172,9 @@ export default function App() {
           locale={state.settings.locale}
           character={state.character}
           defaultCharacterId={state.defaultCharacterId}
-          modelLabel={currentModel}
-          memoryEnabled={state.settings.memoryEnabled}
           memoryCount={state.memories.length}
           pipelineBusy={state.pipelineBusy || state.rememberBusy}
           generating={state.generating}
-          onToggleMemory={state.toggleMemory}
           onOpenMemory={() => state.setMemoryOpen(true)}
           onOpenCharacterHub={() => state.setCharacterHubOpen(true)}
         />
@@ -171,7 +194,7 @@ export default function App() {
         />
       )}
 
-      <MemoryPanel
+      {state.memoryOpen && <Suspense fallback={null}><MemoryPanel
         dict={state.dict}
         open={state.memoryOpen}
         memories={state.memories}
@@ -187,14 +210,16 @@ export default function App() {
             ? state.character.nameEn || state.character.name
             : state.character.name
         }
+        characters={state.characters}
         onClose={() => state.setMemoryOpen(false)}
         onEdit={state.editMemory}
+        onAssign={state.assignMemory}
         onDelete={state.deleteMemory}
         onClearAll={state.clearMemories}
         onRunNow={state.runMemoryNow}
-      />
+      /></Suspense>}
 
-      <SettingsPanel
+      {state.settingsOpen && <Suspense fallback={null}><SettingsPanel
         dict={state.dict}
         open={state.settingsOpen}
         settings={state.settings}
@@ -204,7 +229,7 @@ export default function App() {
         onExport={state.exportBackup}
         onImportFile={state.importBackupFile}
         onReloadData={() => state.reloadFromDisk()}
-      />
+      /></Suspense>}
 
       <EngineGuide
         dict={state.dict}
@@ -215,7 +240,7 @@ export default function App() {
         onRecheck={() => void state.engineAfterInstall()}
       />
 
-      <ModelHub
+      {state.modelHubOpen && <Suspense fallback={null}><ModelHub
         dict={state.dict}
         locale={state.settings.locale}
         open={state.modelHubOpen}
@@ -223,9 +248,10 @@ export default function App() {
         installedModels={state.ollamaModels}
         onClose={() => state.setModelHubOpen(false)}
         onPulled={(id, switchTo) => void state.afterModelPulled(id, switchTo)}
-      />
+        onPullProgress={state.reportPullProgress}
+      /></Suspense>}
 
-      <CharacterHub
+      {state.characterHubOpen && <Suspense fallback={null}><CharacterHub
         dict={state.dict}
         locale={state.settings.locale}
         open={state.characterHubOpen}
@@ -233,22 +259,15 @@ export default function App() {
         activeCharacterId={state.character.id}
         defaultCharacterId={state.defaultCharacterId}
         generating={state.generating}
+        ollamaOnline={state.ollamaOnline}
+        onDescribePortrait={state.describePortraitFromArt}
         onClose={() => state.setCharacterHubOpen(false)}
         onSelectCharacter={state.setSessionCharacter}
         onSetDefaultCharacter={state.setDefaultCharacter}
         onSaveCharacter={state.saveCharacterCard}
         onDeleteCharacter={state.deleteCharacterCard}
         onReplaceCharacters={state.replaceCharacters}
-      />
-
-      <SensitiveConfirm
-        dict={state.dict}
-        open={!!state.sensitivePending}
-        preview={state.sensitivePending?.text ?? ""}
-        tags={state.sensitivePending?.tags ?? []}
-        onConfirm={state.confirmSensitiveSave}
-        onCancel={state.cancelSensitiveSave}
-      />
+      /></Suspense>}
 
       <OnboardingWizard
         dict={state.dict}

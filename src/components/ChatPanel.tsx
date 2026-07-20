@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from "react";
 import type { Dict } from "../i18n";
 import {
   CONTEXT_SIZE_OPTIONS,
@@ -8,6 +14,7 @@ import {
 import { emptyChatHint } from "../lib/errors";
 import type { AssembledBudget } from "../lib/memory/budgetAssemble";
 import type { TokenUsage } from "../lib/ollama";
+import type { PendingChatImage } from "../lib/vision/pending";
 import type {
   AnswerLength,
   AppSettings,
@@ -25,7 +32,6 @@ interface Props {
   input: string;
   generating: boolean;
   lastError: string | null;
-  modelLabel: string;
   ollamaOnline: boolean;
   modelCount: number;
   memoryEnabled: boolean;
@@ -37,11 +43,16 @@ interface Props {
   usageCtxLimit: number | null;
   /** Pre-send rolling pack estimate */
   assembledBudget: AssembledBudget | null;
+  /** Pending chat image (preview only; not in message history). */
+  pendingImage: PendingChatImage | null;
+  attachBusy?: boolean;
   onInput: (v: string) => void;
   onSend: () => void;
   onStop: () => void;
   onRememberText: (text: string) => void;
   onChangeSettings: (patch: Partial<AppSettings>) => void;
+  onAttachImage: (file: File) => void;
+  onClearPendingImage: () => void;
   onOpenModelHub?: () => void;
   onStartEngine?: () => void;
 }
@@ -53,7 +64,6 @@ export function ChatPanel({
   input,
   generating,
   lastError,
-  modelLabel,
   ollamaOnline,
   modelCount,
   memoryEnabled,
@@ -62,24 +72,51 @@ export function ChatPanel({
   tokenUsage,
   usageCtxLimit,
   assembledBudget,
+  pendingImage,
+  attachBusy = false,
   onInput,
   onSend,
   onStop,
   onRememberText,
   onChangeSettings,
+  onAttachImage,
+  onClearPendingImage,
   onOpenModelHub,
   onStartEngine,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [session?.messages, generating]);
 
+  const canSend =
+    Boolean(session) &&
+    ollamaOnline &&
+    (input.trim().length > 0 || Boolean(pendingImage));
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSend();
+      if (canSend && !generating) onSend();
+    }
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          onAttachImage(file);
+          return;
+        }
+      }
     }
   };
 
@@ -118,15 +155,6 @@ export function ChatPanel({
               {dict.character}: {sessionCharacterName}
             </span>
           )}
-          <span className="model-chip" title={modelLabel}>
-            {dict.usingModel}: {modelLabel}
-          </span>
-          <span
-            className="model-chip model-chip-ctx"
-            title={dict.contextSizeHint}
-          >
-            {dict.contextSize}: {formatContextLabel(contextSize)}
-          </span>
         </div>
         <span className="badge">
           {generating
@@ -137,7 +165,7 @@ export function ChatPanel({
         </span>
       </div>
 
-      <div className="context-usage-bar" title={usageTitle}>
+      {(optionsOpen || (pct ?? 0) >= 70) && <div className="context-usage-bar" title={usageTitle}>
         <div className="context-usage-meta">
           <span className="context-usage-label">{dict.contextUsageLabel}</span>
           <span className="context-usage-nums">
@@ -206,7 +234,7 @@ export function ChatPanel({
             }}
           />
         </div>
-      </div>
+      </div>}
 
       <div className="messages">
         {!session || session.messages.length === 0 ? (
@@ -270,7 +298,20 @@ export function ChatPanel({
       {lastError && <div className="banner-error">{lastError}</div>}
 
       <div className="composer">
-        <div className="composer-prefs" aria-label={dict.settingsChat}>
+        <div className="composer-toolbar">
+          <span className="muted small">
+            {formatContextLabel(contextSize)} · {answerLength === "concise" ? dict.answerLengthConcise : dict.answerLengthNormal} · {memoryEnabled ? dict.memoryOn : dict.memoryOff}
+          </span>
+          <button
+            type="button"
+            className={`btn btn-ghost btn-sm ${optionsOpen ? "is-active" : ""}`}
+            aria-expanded={optionsOpen}
+            onClick={() => setOptionsOpen((open) => !open)}
+          >
+            {dict.settingsChat}
+          </button>
+        </div>
+        {optionsOpen && <div className="composer-prefs" aria-label={dict.settingsChat}>
           <div className="pref-group">
             <span className="pref-label">{dict.answerLength}</span>
             <div className="pref-chips">
@@ -332,45 +373,110 @@ export function ChatPanel({
               </button>
             </div>
           </div>
-        </div>
+          <div className="pref-group">
+            <span className="pref-label">{dict.memory}</span>
+            <div className="pref-chips">
+              <button
+                type="button"
+                className={`chip ${memoryEnabled ? "chip-on" : ""}`}
+                disabled={generating}
+                onClick={() => onChangeSettings({ memoryEnabled: !memoryEnabled })}
+              >
+                {memoryEnabled ? dict.memoryOn : dict.memoryOff}
+              </button>
+            </div>
+          </div>
+        </div>}
+
+        {pendingImage && (
+          <div className="composer-attach-preview">
+            <img
+              src={pendingImage.previewUrl}
+              alt=""
+              className="composer-attach-thumb"
+            />
+            <div className="composer-attach-meta">
+              <span className="muted small">
+                {pendingImage.name || dict.attachImage}
+              </span>
+              <span className="muted small" title={dict.attachImageHint}>
+                {dict.attachImageHint}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={generating}
+              onClick={onClearPendingImage}
+              title={dict.clearAttachedImage}
+            >
+              {dict.clearAttachedImage}
+            </button>
+          </div>
+        )}
 
         <textarea
           value={input}
           onChange={(e) => onInput(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           placeholder={dict.placeholder}
           rows={3}
           disabled={!session || generating}
         />
         <div className="composer-actions">
-          {!ollamaOnline && (
-            <span className="composer-hint">{dict.ollamaOfflineHint}</span>
-          )}
-          {memoryEnabled && (
+          <div className="composer-actions-left">
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              disabled={!input.trim() || rememberBusy || !session}
-              onClick={() => onRememberText(input)}
-              title={dict.rememberInput}
+              disabled={!session || generating || attachBusy}
+              onClick={() => imageInputRef.current?.click()}
+              title={dict.attachImageHint}
             >
-              {dict.rememberInput}
+              {attachBusy ? dict.visionWorking : dict.attachImage}
             </button>
-          )}
-          {generating ? (
-            <button type="button" className="btn btn-danger" onClick={onStop}>
-              {dict.stop}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={onSend}
-              disabled={!input.trim() || !session || !ollamaOnline}
-            >
-              {dict.send}
-            </button>
-          )}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) onAttachImage(f);
+              }}
+            />
+          </div>
+          <div className="composer-actions-right">
+            {!ollamaOnline && (
+              <span className="composer-hint">{dict.ollamaOfflineHint}</span>
+            )}
+            {memoryEnabled && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!input.trim() || rememberBusy || !session}
+                onClick={() => onRememberText(input)}
+                title={dict.rememberInput}
+              >
+                {dict.rememberInput}
+              </button>
+            )}
+            {generating ? (
+              <button type="button" className="btn btn-danger" onClick={onStop}>
+                {dict.stop}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onSend}
+                disabled={!canSend}
+              >
+                {dict.send}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </main>

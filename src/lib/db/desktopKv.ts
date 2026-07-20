@@ -3,6 +3,7 @@
  * Config lives in %APPDATA%\Liora\storage-config.json (fixed).
  */
 import { invokeTauri, isTauri } from "../engine/platform";
+import { idbGetJson } from "./idbKv";
 
 export type StoreName = "sessions" | "memory" | "settings" | "characters";
 
@@ -88,8 +89,10 @@ export async function desktopGetJson<T>(name: StoreName): Promise<T | null> {
   if (raw == null || raw === "") return null;
   try {
     return JSON.parse(raw) as T;
-  } catch {
-    return null;
+  } catch (error) {
+    throw new Error(
+      `invalid desktop JSON (${name}): ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -123,7 +126,6 @@ export async function migrateIdbToDesktopIfNeeded(options: {
     if (hasSessions || hasMemory) return false;
 
     // Try IDB
-    const { idbGetJson } = await import("./idbKv");
     const sessions = await idbGetJson<unknown>("sessions");
     const memory = await idbGetJson<unknown>("memory");
     const settings = await idbGetJson<unknown>("settings");

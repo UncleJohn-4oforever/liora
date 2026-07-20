@@ -1,19 +1,16 @@
 import type { Dict } from "../i18n";
 import { isMetaCharacter } from "../lib/memory/scope";
 import type { CharacterCard, Locale } from "../types";
-import { CharacterPortrait } from "./CharacterPortrait";
+import { CharacterRuntimeStage } from "./CharacterRuntimeStage";
 
 interface Props {
   dict: Dict;
   locale: Locale;
   character: CharacterCard;
   defaultCharacterId: string;
-  modelLabel: string;
-  memoryEnabled: boolean;
   memoryCount: number;
   pipelineBusy: boolean;
   generating: boolean;
-  onToggleMemory: () => void;
   onOpenMemory: () => void;
   /** Open character library hub (switch / create / export). */
   onOpenCharacterHub: () => void;
@@ -28,12 +25,9 @@ export function CharacterPanel({
   locale,
   character,
   defaultCharacterId,
-  modelLabel,
-  memoryEnabled,
   memoryCount,
   pipelineBusy,
   generating,
-  onToggleMemory,
   onOpenMemory,
   onOpenCharacterHub,
 }: Props) {
@@ -62,15 +56,17 @@ export function CharacterPanel({
       <div className="character-card character-card-hero">
         <button
           type="button"
-          className="character-art-btn character-hero-stage"
+          className={`character-art-btn character-hero-stage character-live-stage ${meta ? "is-meta" : "is-persona"}`}
+          data-character-id={character.id}
           onClick={onOpenCharacterHub}
           disabled={generating}
           title={dict.characterHubTitle}
           aria-label={dict.characterHubTitle}
         >
-          <CharacterPortrait
+          <CharacterRuntimeStage
             character={character}
-            variant="hero"
+            generating={generating}
+            memoryWorking={pipelineBusy}
             label={
               character.avatarUrl
                 ? undefined
@@ -113,26 +109,12 @@ export function CharacterPanel({
 
       <div className="side-section character-side-tools">
         <div className="side-row">
-          <span className="label">{dict.model}</span>
-          <span className="value mono">{modelLabel}</span>
-        </div>
-        <div className="side-row">
-          <span className="label">{dict.memory}</span>
-          <button
-            type="button"
-            className={`btn btn-sm ${memoryEnabled ? "btn-primary" : "btn-ghost"}`}
-            onClick={onToggleMemory}
-          >
-            {memoryEnabled ? dict.memoryOn : dict.memoryOff}
-          </button>
-        </div>
-        <div className="side-row">
           <span className="label muted small">
             {memoryCount} · {pipelineBusy ? dict.memoryWorking : "—"}
           </span>
           <button
             type="button"
-            className="btn btn-sm btn-primary"
+            className="btn btn-sm btn-ghost"
             onClick={onOpenMemory}
           >
             {dict.openMemory}

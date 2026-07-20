@@ -171,5 +171,6 @@ export function useEngine(locale: Locale) {
     afterInstallRecheck,
     online: engine.phase === "online",
     models: engine.models,
+    visionModels: engine.visionModels ?? [],
   };
 }

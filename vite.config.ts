@@ -15,6 +15,15 @@ export default defineConfig(async () => ({
     commonjsOptions: {
       include: [/sql\.js/, /node_modules/],
     },
+    rollupOptions: {
+      output: {
+        // Markdown parsing is sizeable and independent from Liora's state
+        // logic. Keep it cacheable instead of inflating the application chunk.
+        manualChunks: {
+          markdown: ["react-markdown", "remark-gfm"],
+        },
+      },
+    },
   },
   assetsInclude: ["**/*.wasm"],
 
@@ -25,9 +34,9 @@ export default defineConfig(async () => ({
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
-    // false: if 1420 busy, try next port instead of crashing (web dev)
-    // tauri still prefers 1420 when free
-    strictPort: false,
+    // Tauri's devUrl is fixed to 1420. Fail clearly instead of serving the
+    // app on another port while the desktop window opens unrelated content.
+    strictPort: true,
     // listen on localhost + 127.0.0.1 (avoids blank/connect issues on Windows)
     host: host || "127.0.0.1",
     hmr: host

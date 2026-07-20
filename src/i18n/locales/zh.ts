@@ -54,6 +54,9 @@ export type Dict = {
   layerL5: string;
   edit: string;
   editMemory: string;
+  memoryOwner: string;
+  memoryOwnerMaster: string;
+  memoryOwnerOrphan: string;
   clearMemories: string;
   confirmClearMemories: string;
   close: string;
@@ -62,10 +65,6 @@ export type Dict = {
   rememberThis: string;
   rememberInput: string;
   rememberWorking: string;
-  sensitiveTitle: string;
-  sensitiveHint: string;
-  sensitiveTags: string;
-  confirmSaveMemory: string;
   cancel: string;
   openSettings: string;
   settingsTitle: string;
@@ -180,6 +179,10 @@ export type Dict = {
   modelImportErrName: string;
   modelImportErrOllama: string;
   modelImportErrDesktop: string;
+  modelImportErrMmproj: string;
+  modelImportVisionAttached: string;
+  modelImportVisionMissed: string;
+  modelImportHintMmproj: string;
   modelImportNeedEngine: string;
   modelSwitchAsk: string;
   modelSwitchYes: string;
@@ -266,6 +269,20 @@ export type Dict = {
   characterAvatarErrSize: string;
   characterAvatarErrLoad: string;
   characterAvatarFailed: string;
+  /** Chat vision → text */
+  attachImage: string;
+  attachImageHint: string;
+  clearAttachedImage: string;
+  visionWorking: string;
+  visionNoModel: string;
+  visionFailed: string;
+  visionErrType: string;
+  visionErrSize: string;
+  visionErrLoad: string;
+  visionDescribePortrait: string;
+  visionDescribePortraitWorking: string;
+  visionDescribePortraitOk: string;
+  visionDescribePortraitBusy: string;
   memoryScopeMeta: string;
   memoryScopePersona: string;
 };
@@ -339,11 +356,6 @@ export const zh: Dict = {
   rememberThis: "记住这句",
   rememberInput: "记住输入框",
   rememberWorking: "正在写入记忆…",
-  sensitiveTitle: "可能含敏感信息",
-  sensitiveHint:
-    "检测到可能的敏感内容（联系方式/地址/健康/财务等）。确认后才会写入本地记忆；可取消。",
-  sensitiveTags: "类别",
-  confirmSaveMemory: "确认写入",
   cancel: "取消",
   openSettings: "设置",
   settingsTitle: "设置与备份",
@@ -456,13 +468,13 @@ export const zh: Dict = {
   modelNoneHint: "暂无本地模型，点「获取模型」下载一个即可开始对话。",
   modelImportTitle: "导入本地 GGUF",
   modelImportHint:
-    "若你从 Hugging Face 等下载了 .gguf 文件，可在此导入到 Ollama。导入后会出现在模型列表（无需 Ollama 界面）。",
+    "选择主模型 .gguf。若同文件夹有 mmproj（视觉模块），会自动一并导入以启用看图。导入后出现在模型列表（无需 Ollama 界面）。",
   modelImportPick: "选择文件…",
   modelImportPath: "文件路径",
   modelImportName: "导入后的名称",
   modelImportNameHint: "仅字母数字、点、下划线、短横线；可选 :tag，如 my-gemma:q5",
   modelImportRun: "开始导入",
-  modelImportWorking: "正在导入（大文件可能需几分钟）…",
+  modelImportWorking: "正在导入（含视觉模块时可能更久）…",
   modelImportSuccess: "已导入 {m}，可在顶部列表中选择。",
   modelImportFailed: "导入失败",
   modelImportErrNotFound: "找不到该文件，请重新选择。",
@@ -470,6 +482,13 @@ export const zh: Dict = {
   modelImportErrName: "名称不合法：请用英文/数字等简单名字。",
   modelImportErrOllama: "未找到 Ollama，请先安装并启动本地引擎。",
   modelImportErrDesktop: "导入本地 GGUF 仅支持桌面版 Liora。",
+  modelImportErrMmproj:
+    "你选中的是视觉模块（mmproj），请改选主语言 .gguf；同目录的 mmproj 会自动附带。",
+  modelImportVisionAttached: "已附带视觉模块（mmproj），导入后可用于看图。",
+  modelImportVisionMissed:
+    "检测到 mmproj，但 Ollama 多模态打包失败，已按纯文本导入。可升级 Ollama 后重试，或另装官方 vision 模型。",
+  modelImportHintMmproj:
+    "提示：主模型与 mmproj-*.gguf 放在同一文件夹，选主 .gguf 即可自动加载视觉模块。",
   modelImportNeedEngine: "建议先启动本地引擎，再导入模型。",
   modelSwitchAsk: "完成后是否切换为该模型？",
   modelSwitchYes: "已切换为 {m}。",
@@ -566,8 +585,26 @@ export const zh: Dict = {
   characterAvatarErrSize: "图片过大（最大约 12MB），请压缩后再试。",
   characterAvatarErrLoad: "无法读取该图片，请换一张再试。",
   characterAvatarFailed: "立绘处理失败",
+  attachImage: "贴图",
+  attachImageHint:
+    "图片仅用于本地看图总结，不会写入多模态历史；发送后只保留文字描述。可粘贴截图。",
+  clearAttachedImage: "移除图片",
+  visionWorking: "看图中…",
+  visionNoModel:
+    "当前 Ollama 中没有带 vision 能力的模型。聊天用的文本模型不能看图；LM Studio 里能看图也不等于 Ollama 这份权重支持多模态。",
+  visionFailed: "看图失败",
+  visionErrType: "请选择图片文件（JPG / PNG / WebP / GIF）。",
+  visionErrSize: "图片过大（最大约 16MB），请压缩后再试。",
+  visionErrLoad: "无法读取该图片，请换一张再试。",
+  visionDescribePortrait: "看图生成描述",
+  visionDescribePortraitWorking: "看图写描述中…",
+  visionDescribePortraitOk: "已根据立绘生成描述草稿，可再编辑",
+  visionDescribePortraitBusy: "对话生成中，请稍后再看图生成描述。",
   memoryScopeMeta:
-    "当前为 Meta（本机 AI）：列表与注入仅显示「用户主档」记忆。角色私有记忆不会出现在这里。",
+    "当前为 Meta（本机 AI 与记忆管理员）：可审查主档、无主记忆和各角色记忆，并调整归属。对话默认使用目录摘要，相关时才检索角色详情。",
   memoryScopePersona:
-    "当前角色「{name}」：仅显示该角色专属记忆。用户主档只在 Meta（Liora）下管理与注入。",
+    "当前角色「{name}」：使用可共享的用户主档和本角色专属记忆，不读取其他角色的私有经历。",
+  memoryOwner: "归属",
+  memoryOwnerMaster: "用户主档",
+  memoryOwnerOrphan: "无主记忆",
 };

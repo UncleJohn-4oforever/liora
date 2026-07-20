@@ -1,5 +1,6 @@
 import type { Dict } from "../i18n";
-import type { MemoryItem } from "../types/memory";
+import type { CharacterCard } from "../types";
+import type { MemoryItem, MemoryScope } from "../types/memory";
 
 interface Props {
   dict: Dict;
@@ -11,8 +12,10 @@ interface Props {
   /** Meta shows master dossier; persona shows that card only */
   isMeta: boolean;
   characterName: string;
+  characters: CharacterCard[];
   onClose: () => void;
   onEdit: (id: string, object: string) => void;
+  onAssign: (id: string, scope: MemoryScope, characterId?: string) => void;
   onDelete: (id: string) => void;
   onClearAll: () => void;
   onRunNow: () => void;
@@ -27,8 +30,10 @@ export function MemoryPanel({
   pipelineBusy,
   isMeta,
   characterName,
+  characters,
   onClose,
   onEdit,
+  onAssign,
   onDelete,
   onClearAll,
   onRunNow,
@@ -117,7 +122,37 @@ export function MemoryPanel({
                     </span>
                   </div>
                   <div className="memory-card-body">{m.object}</div>
+                  <div className="muted small">
+                    {dict.memoryOwner}: {m.scope === "character"
+                      ? characters.find((c) => c.id === m.characterId)?.name || m.characterId
+                      : m.scope === "orphan"
+                        ? dict.memoryOwnerOrphan
+                        : dict.memoryOwnerMaster}
+                  </div>
                   <div className="memory-card-actions">
+                    {isMeta && (
+                      <select
+                        className="input"
+                        aria-label={dict.memoryOwner}
+                        value={m.scope === "character" ? `character:${m.characterId}` : m.scope}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          if (value === "master" || value === "orphan") {
+                            onAssign(m.id, value);
+                          } else if (value.startsWith("character:")) {
+                            onAssign(m.id, "character", value.slice("character:".length));
+                          }
+                        }}
+                      >
+                        <option value="master">{dict.memoryOwnerMaster}</option>
+                        <option value="orphan">{dict.memoryOwnerOrphan}</option>
+                        {characters.filter((c) => c.kind !== "meta").map((c) => (
+                          <option key={c.id} value={`character:${c.id}`}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"

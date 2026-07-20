@@ -29,7 +29,7 @@ export function characterKindOf(
  * Meta chat → master (user dossier). Persona chat → that character only.
  */
 export function writeTargetForCharacter(card: CharacterCard | null | undefined): {
-  scope: MemoryScope;
+  scope: "master" | "character";
   characterId?: string;
 } {
   if (isMetaCharacter(card)) {
@@ -45,8 +45,8 @@ export function memoryDedupeKey(m: Pick<
   "scope" | "characterId" | "subject" | "predicate"
 >): string {
   const scope = m.scope ?? "character";
-  const owner =
-    scope === "master" ? "master" : (m.characterId ?? "orphan").trim();
+  const owner = scope === "master" ? "master" :
+    scope === "orphan" ? "orphan" : (m.characterId ?? "orphan").trim();
   return `${scope}::${owner}::${m.subject}::${m.predicate}`.toLowerCase();
 }
 
@@ -59,6 +59,13 @@ export function stampMemoryAtom(
     return {
       ...item,
       scope: "master",
+      characterId: undefined,
+    } as MemoryItem;
+  }
+  if (target.scope === "orphan") {
+    return {
+      ...item,
+      scope: "orphan",
       characterId: undefined,
     } as MemoryItem;
   }
@@ -90,8 +97,8 @@ export function stampChunk(ch: TextChunk, characterId: string): TextChunk {
 
 /**
  * Memories visible to the current chat role.
- * - Meta: master dossier only (character-private atoms stay out)
- * - Persona: that character's atoms only
+ * - Meta: master + orphan directly; persona memories are searched by relevance.
+ * - Persona: shared master profile + that character's private memories.
  */
 export function memoriesForInjection(
   items: MemoryItem[],
@@ -99,13 +106,24 @@ export function memoriesForInjection(
 ): MemoryItem[] {
   const active = items.filter((m) => m.status === "active");
   if (options.isMeta) {
-    return active.filter((m) => (m.scope ?? "character") === "master");
+    return active.filter((m) => {
+      const scope = m.scope ?? (m.characterId ? "character" : "orphan");
+      if (scope === "master" || scope === "orphan") return true;
+      return false;
+    });
   }
   return active.filter(
-    (m) =>
-      (m.scope ?? "character") === "character" &&
-      (m.characterId ?? "") === options.characterId,
+    (m) => {
+      const scope = m.scope ?? (m.characterId ? "character" : "orphan");
+      if (scope === "master") return true;
+      return scope === "character" && (m.characterId ?? "") === options.characterId;
+    },
   );
+}
+
+/** Character memories Meta may discover through its catalog/search index. */
+export function characterMemoriesForMetaIndex(items: MemoryItem[]): MemoryItem[] {
+  return items.filter((m) => m.status === "active" && m.scope === "character");
 }
 
 export function episodesForInjection(
@@ -138,17 +156,20 @@ export function migrateMemoryStoreScopes(
   data: MemoryStoreData,
   defaultCharacterId: string = DEFAULT_CHARACTER.id,
 ): MemoryStoreData {
-  if (data.scopeMigrated) {
+  if (data.scopeMigrated && (data.scopeVersion ?? 1) >= 2) {
     return normalizeStoreShapes(data, defaultCharacterId);
   }
 
   const memories = (data.memories ?? []).map((m) => {
-    if (m.scope === "master" || m.scope === "character") {
+    if (m.scope === "master" || m.scope === "character" || m.scope === "orphan") {
       return m.scope === "master"
         ? { ...m, characterId: undefined }
+        : m.scope === "orphan"
+          ? { ...m, characterId: undefined }
         : {
             ...m,
-            characterId: m.characterId?.trim() || defaultCharacterId,
+            scope: m.characterId?.trim() ? "character" as const : "orphan" as const,
+            characterId: m.characterId?.trim() || undefined,
           };
     }
     const pred = (m.predicate ?? "").toLowerCase();
@@ -163,8 +184,8 @@ export function migrateMemoryStoreScopes(
     }
     return {
       ...m,
-      scope: "character" as const,
-      characterId: m.characterId?.trim() || defaultCharacterId,
+      scope: m.characterId?.trim() ? "character" as const : "orphan" as const,
+      characterId: m.characterId?.trim() || undefined,
     };
   });
 
@@ -187,6 +208,7 @@ export function migrateMemoryStoreScopes(
     episodes,
     chunks,
     scopeMigrated: true,
+    scopeVersion: 2,
   };
 }
 
@@ -207,8 +229,12 @@ function normalizeStoreShapes(
     ...data,
     version: 1,
     memories: (data.memories ?? []).map((m) => {
-      if ((m.scope ?? "character") === "master") {
+      const scope = m.scope ?? (m.characterId?.trim() ? "character" : "orphan");
+      if (scope === "master") {
         return { ...m, scope: "master", characterId: undefined };
+      }
+      if (scope === "orphan") {
+        return { ...m, scope: "orphan", characterId: undefined };
       }
       return {
         ...m,
@@ -227,13 +253,15 @@ function normalizeStoreShapes(
       characterId: c.characterId?.trim() || defaultCharacterId,
     })),
     scopeMigrated: true,
+    scopeVersion: 2,
   };
 }
 
-/** UI list for memory center: master when Meta, else this character. */
+/** Meta audits every scope; personas manage shared master + their own memories. */
 export function memoriesForPanel(
   items: MemoryItem[],
   options: { isMeta: boolean; characterId: string },
 ): MemoryItem[] {
+  if (options.isMeta) return items.filter((m) => m.status === "active");
   return memoriesForInjection(items, options);
 }

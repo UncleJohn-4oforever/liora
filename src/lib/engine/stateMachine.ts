@@ -9,6 +9,7 @@ import { isTauri } from "./platform";
 function base(): Omit<EngineSnapshot, "phase" | "message" | "updatedAt"> {
   return {
     models: [],
+    visionModels: [],
     installPath: null,
     version: null,
     lastError: null,
@@ -48,6 +49,7 @@ export async function refreshEngine(options?: {
       phase: "online",
       message: t("本地引擎就绪", "Local engine ready"),
       models: api.models,
+      visionModels: api.visionModels ?? [],
       installPath: null,
       version: api.version,
       lastError: null,
@@ -64,6 +66,7 @@ export async function refreshEngine(options?: {
         "Local engine is not responding.",
       ),
       models: [],
+      visionModels: [],
       installPath: null,
       version: null,
       lastError: null,

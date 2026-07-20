@@ -39,5 +39,6 @@ Thumbs.db
 Desktop.ini
 
 # Local user data / backups (if ever stored in repo dir)
+backups/
 *.backup.json
 liora-backup-*.json

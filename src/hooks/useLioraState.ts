@@ -1,18 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_CHARACTER, DEFAULT_MODEL } from "../data/defaults";
 import { t } from "../i18n";
 import {
-  flushPersist,
   loadAllSessions,
   loadMemoryStoreFromDb,
   loadSettingsFromDb,
   migrateFromLocalStorageIfNeeded,
-  mirrorMemoryToLocalStorage,
-  mirrorSessionsToLocalStorage,
-  mirrorSettingsToLocalStorage,
   replaceAllSessions,
-  replaceMemoryStore,
-  saveSettingsToDb,
 } from "../lib/db";
 import {
   createCharacterDraft,
@@ -34,10 +28,7 @@ import {
   runMemoryPipeline,
   SUMMARY_EVERY_N_MESSAGES,
 } from "../lib/memory/pipeline";
-import {
-  commitPendingSensitive,
-  rememberExplicitText,
-} from "../lib/memory/rememberExplicit";
+import { rememberExplicitText } from "../lib/memory/rememberExplicit";
 import {
   isMetaCharacter,
   memoriesForPanel,
@@ -46,19 +37,44 @@ import {
 import {
   activeMemories,
   clearAllMemories,
+  loadMemoryStore,
   softDeleteMemory,
   updateMemoryObject,
+  updateMemoryOwnership,
 } from "../lib/memory/store";
-import type { MemoryItem, MemoryStoreData } from "../types/memory";
+import { loadSessions, loadSettings } from "../lib/storage";
+import type { MemoryStoreData } from "../types/memory";
 import { genOptionsForChat, normalizeContextSize } from "../lib/chatPrompt";
 import { humanizeError } from "../lib/errors";
+import {
+  generateActivity,
+  IDLE_ACTIVITY,
+  loadActivity,
+  pullActivity,
+  visionActivity,
+  type EngineActivity,
+} from "../lib/engine/activity";
 import {
   resolveModelName,
   streamOllamaChat,
   toOllamaMessages,
+  warmModel,
   type TokenUsage,
 } from "../lib/ollama";
+import {
+  VisionCompressException,
+  compressImageDataUrl,
+  compressImageFile,
+  describeImage,
+  formatImageInjectedContent,
+  mapVisionCompressError,
+  pickVisionModel,
+  visionInstallHint,
+  type PendingChatImage,
+} from "../lib/vision";
+import type { PullProgress } from "../lib/models/pull";
 import { useEngine } from "./useEngine";
+import { usePersistence } from "./usePersistence";
 import {
   applyBackup,
   buildBackup,
@@ -113,6 +129,8 @@ function emptyMemory(): MemoryStoreData {
     chunks: [],
     cursors: [],
     recentUpdates: [],
+    scopeMigrated: true,
+    scopeVersion: 2,
   };
 }
 
@@ -126,6 +144,12 @@ export function useLioraState() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [input, setInput] = useState("");
+  /** Composer attachment: described on send, never stored in message history. */
+  const [pendingImage, setPendingImage] = useState<PendingChatImage | null>(
+    null,
+  );
+  const pendingImageRef = useRef<PendingChatImage | null>(null);
+  const [attachBusy, setAttachBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [memoryStore, setMemoryStore] = useState<MemoryStoreData>(emptyMemory);
@@ -133,6 +157,23 @@ export function useLioraState() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelHubOpen, setModelHubOpen] = useState(false);
   const [characterHubOpen, setCharacterHubOpen] = useState(false);
+  /** Top-bar engine activity: pull / VRAM load (beyond raw online/offline). */
+  const [engineActivity, setEngineActivity] =
+    useState<EngineActivity>(IDLE_ACTIVITY);
+  const warmAbortRef = useRef<AbortController | null>(null);
+  /** Last model that completed a chat/warm successfully (weights likely resident). */
+  const residentModelRef = useRef<string | null>(null);
+  /** True only while assistant stream is running — memory jobs defer in this window. */
+  const generatingRef = useRef(false);
+  /** Abort in-flight memory pipeline when user starts a new generation. */
+  const memoryAbortRef = useRef<AbortController | null>(null);
+  /** Job to run once generation ends (or after an aborted pipeline). */
+  const pendingMemoryRef = useRef<{
+    sessionId: string;
+    messages: Message[];
+    model: string;
+    force: boolean;
+  } | null>(null);
   /** Last completed turn's token usage (from Ollama). */
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   /** Context limit used for that turn (num_ctx). */
@@ -147,11 +188,6 @@ export function useLioraState() {
     detail?: string;
   } | null>(null);
   const [rememberBusy, setRememberBusy] = useState(false);
-  const [sensitivePending, setSensitivePending] = useState<{
-    text: string;
-    tags: string[];
-    items: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">[];
-  } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const pipelineRef = useRef(false);
@@ -179,6 +215,7 @@ export function useLioraState() {
   );
   const engineApi = useEngine(settings.locale);
   const ollamaModels = engineApi.models;
+  const visionModels = engineApi.visionModels;
   const ollamaOnline = engineApi.online;
 
   // Boot SQLite + migrate
@@ -224,8 +261,6 @@ export function useLioraState() {
           setBootError(msg);
           // Fallback: localStorage path so UI is never stuck blank
           try {
-            const { loadSessions, loadSettings } = await import("../lib/storage");
-            const { loadMemoryStore } = await import("../lib/memory/store");
             const s = loadSettings(defaultSettings);
             let sess = loadSessions();
             if (sess.length === 0) {
@@ -262,60 +297,13 @@ export function useLioraState() {
     };
   }, []);
 
-  // Debounced persist sessions (streaming would thrash otherwise)
-  useEffect(() => {
-    if (!ready) return;
-    mirrorSessionsToLocalStorage(sessions);
-    const t = window.setTimeout(() => {
-      void replaceAllSessions(sessions).catch(() => {
-        /* keep LS mirror */
-      });
-    }, 400);
-    return () => window.clearTimeout(t);
-  }, [sessions, ready]);
-
-  // Persist settings
-  useEffect(() => {
-    if (!ready) return;
-    mirrorSettingsToLocalStorage(settings);
-    void saveSettingsToDb(settings);
-  }, [settings, ready]);
-
-  // Persist characters
-  useEffect(() => {
-    if (!ready) return;
-    const t = window.setTimeout(() => {
-      void saveCharacters(characters).catch(() => {
-        /* ignore */
-      });
-    }, 300);
-    return () => window.clearTimeout(t);
-  }, [characters, ready]);
-
-  // Debounced persist memory
-  useEffect(() => {
-    if (!ready) return;
-    mirrorMemoryToLocalStorage(memoryStore);
-    const t = window.setTimeout(() => {
-      void replaceMemoryStore(memoryStore).catch(() => {
-        /* keep LS mirror */
-      });
-    }, 400);
-    return () => window.clearTimeout(t);
-  }, [memoryStore, ready]);
-
-  // Flush on unload
-  useEffect(() => {
-    const onHide = () => {
-      void flushPersist();
-    };
-    window.addEventListener("pagehide", onHide);
-    window.addEventListener("beforeunload", onHide);
-    return () => {
-      window.removeEventListener("pagehide", onHide);
-      window.removeEventListener("beforeunload", onHide);
-    };
-  }, []);
+  const { persistenceError } = usePersistence({
+    ready,
+    sessions,
+    settings,
+    characters,
+    memoryStore,
+  });
 
   const setLocale = useCallback((locale: Locale) => {
     setSettings((s) => ({ ...s, locale }));
@@ -383,13 +371,49 @@ export function useLioraState() {
     setAssembledBudget(null);
   }, []);
 
+  const clearPendingImage = useCallback(() => {
+    pendingImageRef.current = null;
+    setPendingImage(null);
+  }, []);
+
+  const attachImageFile = useCallback(
+    async (file: File) => {
+      if (generatingRef.current) return;
+      setAttachBusy(true);
+      setLastError(null);
+      try {
+        const compressed = await compressImageFile(file);
+        const next: PendingChatImage = {
+          id: uid("img"),
+          previewUrl: compressed.previewUrl,
+          base64: compressed.base64,
+          name: file.name || undefined,
+        };
+        pendingImageRef.current = next;
+        setPendingImage(next);
+      } catch (e) {
+        const code =
+          e instanceof VisionCompressException
+            ? e.code
+            : e instanceof Error
+              ? e.message
+              : "failed";
+        setLastError(mapVisionCompressError(code, dict));
+      } finally {
+        setAttachBusy(false);
+      }
+    },
+    [dict],
+  );
+
   const selectSession = useCallback(
     (id: string) => {
       setActiveId(id);
       setLastError(null);
+      clearPendingImage();
       resetContextUsage();
     },
-    [resetContextUsage],
+    [resetContextUsage, clearPendingImage],
   );
 
   const newSession = useCallback(() => {
@@ -403,6 +427,7 @@ export function useLioraState() {
     setSessions((prev) => [s, ...prev]);
     setActiveId(s.id);
     setInput("");
+    clearPendingImage();
     setLastError(null);
     resetContextUsage();
   }, [
@@ -410,6 +435,7 @@ export function useLioraState() {
     settings.defaultModelId,
     settings.defaultCharacterId,
     resetContextUsage,
+    clearPendingImage,
   ]);
 
   /** Bind character to the active session only (not global). */
@@ -491,6 +517,42 @@ export function useLioraState() {
     setCharacters(ensureBuiltin(items));
   }, []);
 
+  const reportPullProgress = useCallback(
+    (modelId: string, p: PullProgress | null) => {
+      const locale = settingsRef.current.locale;
+      if (!p) {
+        setEngineActivity((a) => (a.kind === "pull" ? IDLE_ACTIVITY : a));
+        return;
+      }
+      setEngineActivity(
+        pullActivity(modelId, p.percent, p.status || "", locale),
+      );
+    },
+    [],
+  );
+
+  const warmSessionModel = useCallback(async (modelId: string) => {
+    const id = modelId.trim();
+    if (!id) return;
+    // Already warmed / used this session — skip redundant load (expensive)
+    if (residentModelRef.current === id) return;
+    const locale = settingsRef.current.locale;
+    warmAbortRef.current?.abort();
+    const ac = new AbortController();
+    warmAbortRef.current = ac;
+    setEngineActivity(loadActivity(id, locale));
+    try {
+      const numCtx = normalizeContextSize(settingsRef.current.contextSize);
+      const r = await warmModel(id, { signal: ac.signal, numCtx });
+      if (r.ok) residentModelRef.current = id;
+    } finally {
+      if (warmAbortRef.current === ac) {
+        warmAbortRef.current = null;
+        setEngineActivity((a) => (a.kind === "load" ? IDLE_ACTIVITY : a));
+      }
+    }
+  }, []);
+
   const setSessionModel = useCallback(
     (modelId: string) => {
       const id = modelId.trim();
@@ -503,8 +565,11 @@ export function useLioraState() {
             : s,
         ),
       );
+      if (engineApi.online) {
+        void warmSessionModel(id);
+      }
     },
-    [active],
+    [active, engineApi.online, warmSessionModel],
   );
 
   /**
@@ -649,11 +714,6 @@ export function useLioraState() {
     [],
   );
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setGenerating(false);
-  }, []);
 
   const scheduleMemoryJob = useCallback(
     async (
@@ -662,14 +722,34 @@ export function useLioraState() {
       model: string,
       force = false,
     ) => {
-      if (!settings.memoryEnabled || pipelineRef.current) return;
+      if (!settingsRef.current.memoryEnabled) return;
       if (!ollamaOnline) return;
+
+      // Only defer while the assistant is generating. Typing time is free for memory.
+      if (generatingRef.current) {
+        pendingMemoryRef.current = { sessionId, messages, model, force };
+        return;
+      }
+
+      // Newer request while a job is running: queue latest work after current finishes
+      if (pipelineRef.current) {
+        pendingMemoryRef.current = { sessionId, messages, model, force };
+        return;
+      }
+
+      const ac = new AbortController();
+      memoryAbortRef.current = ac;
       pipelineRef.current = true;
       setPipelineBusy(true);
       try {
+        // If user starts generating mid-job, abort promptly
+        if (generatingRef.current) {
+          pendingMemoryRef.current = { sessionId, messages, model, force };
+          return;
+        }
         const everyN =
-          settings.summaryEveryN ?? SUMMARY_EVERY_N_MESSAGES;
-        const numCtx = normalizeContextSize(settings.contextSize);
+          settingsRef.current.summaryEveryN ?? SUMMARY_EVERY_N_MESSAGES;
+        const numCtx = normalizeContextSize(settingsRef.current.contextSize);
         const sess =
           sessionsRef.current.find((x) => x.id === sessionId) ?? null;
         const char = resolveCharacter(
@@ -687,7 +767,12 @@ export function useLioraState() {
           force,
           everyN,
           numCtx,
+          signal: ac.signal,
         });
+        if (ac.signal.aborted || generatingRef.current) {
+          // Interrupted by a new chat turn — leave pending if set by send()
+          return;
+        }
         setMemoryStore(result.store);
         if (result.didSummary) {
           const detail = formatMemoryJobSummary(
@@ -696,10 +781,10 @@ export function useLioraState() {
               labels: result.updatedLabels,
               layerCounts: result.layerCounts,
             },
-            settings.locale,
+            settingsRef.current.locale,
           );
           const compressHint =
-            settings.locale === "en"
+            settingsRef.current.locale === "en"
               ? "Compressed older turns into summary"
               : "已将更早对话压缩为摘要";
           const n =
@@ -717,20 +802,45 @@ export function useLioraState() {
           });
         }
       } catch {
-        /* non-fatal */
+        /* non-fatal / aborted */
       } finally {
         pipelineRef.current = false;
+        if (memoryAbortRef.current === ac) memoryAbortRef.current = null;
         setPipelineBusy(false);
+        const next = pendingMemoryRef.current;
+        if (next && !generatingRef.current) {
+          pendingMemoryRef.current = null;
+          void scheduleMemoryJob(
+            next.sessionId,
+            next.messages,
+            next.model,
+            next.force,
+          );
+        }
       }
     },
-    [
-      ollamaOnline,
-      settings.locale,
-      settings.memoryEnabled,
-      settings.contextSize,
-      settings.summaryEveryN,
-    ],
+    [ollamaOnline],
   );
+
+  /** Stop generation; memory may resume while user types. */
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    generatingRef.current = false;
+    setGenerating(false);
+    setEngineActivity((a) =>
+      a.kind === "load" ||
+      a.kind === "generate" ||
+      a.kind === "vision"
+        ? IDLE_ACTIVITY
+        : a,
+    );
+    const p = pendingMemoryRef.current;
+    if (p) {
+      pendingMemoryRef.current = null;
+      void scheduleMemoryJob(p.sessionId, p.messages, p.model, p.force);
+    }
+  }, [scheduleMemoryJob]);
 
   const runMemoryNow = useCallback(() => {
     if (!active || !settings.memoryEnabled) return;
@@ -773,10 +883,6 @@ export function useLioraState() {
           character: char,
         });
         if (result.error === "empty") return;
-        if (result.pendingSensitive) {
-          setSensitivePending(result.pendingSensitive);
-          return;
-        }
         setMemoryStore(result.store);
         if (result.labels.length > 0) {
           setToast({ count: result.labels.length, labels: result.labels });
@@ -790,26 +896,10 @@ export function useLioraState() {
     [active, ollamaModels, settings.defaultModelId, settings.memoryEnabled],
   );
 
-  const confirmSensitiveSave = useCallback(() => {
-    if (!sensitivePending) return;
-    const { store, labels } = commitPendingSensitive(
-      memoryStoreRef.current,
-      sensitivePending.items,
-    );
-    setMemoryStore(store);
-    setSensitivePending(null);
-    if (labels.length > 0) {
-      setToast({ count: labels.length, labels });
-    }
-  }, [sensitivePending]);
-
-  const cancelSensitiveSave = useCallback(() => {
-    setSensitivePending(null);
-  }, []);
-
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || !active || generating) return;
+    const attached = pendingImageRef.current;
+    if ((!text && !attached) || !active || generating) return;
 
     const sNow = settingsRef.current;
 
@@ -849,16 +939,105 @@ export function useLioraState() {
       }
     }
 
-    const rememberMatch = text.match(
+    // Claim GPU early: vision describe + chat are one atomic turn for the user
+    generatingRef.current = true;
+    memoryAbortRef.current?.abort();
+    setGenerating(true);
+    setLastError(null);
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+
+    let finalUserContent = text;
+    // Vision → text: describe once, then only text enters history / assemble
+    if (attached) {
+      const visionModel = pickVisionModel({
+        available: ollamaModels,
+        visionCapable: visionModels,
+        preferred: null,
+        chatModel: model,
+      });
+      if (!visionModel) {
+        generatingRef.current = false;
+        setGenerating(false);
+        setEngineActivity(IDLE_ACTIVITY);
+        abortRef.current = null;
+        setLastError(
+          `${dict.visionNoModel}\n${visionInstallHint(sNow.locale)}`,
+        );
+        return;
+      }
+      setEngineActivity(visionActivity(visionModel, sNow.locale));
+      try {
+        const desc = await describeImage({
+          model: visionModel,
+          base64: attached.base64,
+          locale: sNow.locale,
+          mode: "chat",
+          signal: ac.signal,
+          numCtx: Math.min(4096, normalizeContextSize(sNow.contextSize)),
+        });
+        finalUserContent = formatImageInjectedContent(
+          desc,
+          text,
+          sNow.locale,
+        );
+        // Drop pixels immediately — never land in Message / memory payload
+        clearPendingImage();
+        // Vision model may have replaced chat weights in VRAM
+        if (visionModel !== model) {
+          residentModelRef.current = null;
+        } else {
+          residentModelRef.current = visionModel;
+        }
+      } catch (e) {
+        if (ac.signal.aborted) {
+          generatingRef.current = false;
+          setGenerating(false);
+          setEngineActivity(IDLE_ACTIVITY);
+          abortRef.current = null;
+          return;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        generatingRef.current = false;
+        setGenerating(false);
+        setEngineActivity(IDLE_ACTIVITY);
+        abortRef.current = null;
+        if (
+          /vision_not_multimodal|vision_model_not_found|does not support images|multimodal/i.test(
+            msg,
+          )
+        ) {
+          setLastError(
+            `${dict.visionFailed}: ${dict.visionNoModel}\n${visionInstallHint(sNow.locale)}`,
+          );
+        } else {
+          setLastError(
+            `${dict.visionFailed}: ${humanizeError(msg, sNow.locale)}`,
+          );
+        }
+        return;
+      }
+    }
+
+    if (!finalUserContent.trim()) {
+      generatingRef.current = false;
+      setGenerating(false);
+      setEngineActivity(IDLE_ACTIVITY);
+      abortRef.current = null;
+      return;
+    }
+
+    const rememberMatch = finalUserContent.match(
       /^(?:请)?记住(?:这个|一下|：|:)?\s*(.+)$/s,
     );
     if (rememberMatch?.[1] && sNow.memoryEnabled) {
       void rememberText(rememberMatch[1]);
     } else if (
       sNow.memoryEnabled &&
-      /(请记住|帮我记住|记下来)/.test(text)
+      /(请记住|帮我记住|记下来)/.test(finalUserContent)
     ) {
-      void rememberText(text);
+      void rememberText(finalUserContent);
     }
 
     const sessionId = active.id;
@@ -875,7 +1054,7 @@ export function useLioraState() {
     const userMsg: Message = {
       id: uid("msg"),
       role: "user",
-      content: text,
+      content: finalUserContent,
       createdAt: Date.now(),
     };
     const assistantId = uid("msg");
@@ -888,9 +1067,12 @@ export function useLioraState() {
       characterName,
     };
 
+    const titleSeed =
+      text ||
+      (sNow.locale === "en" ? "Image" : "图片");
     const title =
       active.messages.length === 0
-        ? text.slice(0, 28) + (text.length > 28 ? "…" : "")
+        ? titleSeed.slice(0, 28) + (titleSeed.length > 28 ? "…" : "")
         : active.title;
 
     const historyForModel = [...active.messages, userMsg];
@@ -910,6 +1092,7 @@ export function useLioraState() {
       showThinking,
       contextSize,
       character: sessionCharacter,
+      characterCatalog: charactersRef.current,
     });
     const hot = assembled.hotMessages;
     const fullSystem = assembled.systemPrompt;
@@ -929,11 +1112,13 @@ export function useLioraState() {
       ),
     );
     setInput("");
-    setGenerating(true);
-    setLastError(null);
-
-    const ac = new AbortController();
-    abortRef.current = ac;
+    // Only show load when weights not resident; else generating
+    const needLoad = residentModelRef.current !== model;
+    setEngineActivity(
+      needLoad
+        ? loadActivity(model, sNow.locale)
+        : generateActivity(model, sNow.locale),
+    );
 
     const ollamaMessages = toOllamaMessages(hot, fullSystem);
     const genOptions = genOptionsForChat(
@@ -944,10 +1129,9 @@ export function useLioraState() {
     // Real Ollama usage clears until this turn finishes; keep packed estimate visible
     setTokenUsage(null);
 
-    // Kick rolling compress for cold region (does not block this turn)
-    if (sNow.memoryEnabled && assembled.budget.coldCount >= 2) {
-      void scheduleMemoryJob(sessionId, historyForModel, model, false);
-    }
+    // IMPORTANT: do NOT run memory pipeline in parallel with generation.
+    // Same GPU + different num_ctx / concurrent requests thrash Ollama and
+    // make every turn feel like a model reload (unlike bare Ollama / LM Studio).
 
     const truncNote =
       sNow.locale === "en"
@@ -958,6 +1142,7 @@ export function useLioraState() {
       let acc = "";
       let thinkAcc = "";
       let doneReason: string | undefined;
+      let sawOutput = false;
       for await (const chunk of streamOllamaChat({
         model,
         messages: ollamaMessages,
@@ -965,6 +1150,24 @@ export function useLioraState() {
         showThinking,
         genOptions,
       })) {
+        if (
+          !sawOutput &&
+          (chunk.contentDelta ||
+            chunk.thinkingDelta ||
+            chunk.done ||
+            chunk.error)
+        ) {
+          sawOutput = true;
+          // First token: weights are in; switch load 鈫?generate (or clear if done)
+          if (chunk.contentDelta || chunk.thinkingDelta) {
+            residentModelRef.current = model;
+            setEngineActivity(generateActivity(model, sNow.locale));
+          } else {
+            setEngineActivity((a) =>
+              a.kind === "load" || a.kind === "generate" ? IDLE_ACTIVITY : a,
+            );
+          }
+        }
         if (chunk.error && chunk.error !== "aborted") {
           const friendly = humanizeError(chunk.error, sNow.locale);
           setLastError(friendly);
@@ -1039,11 +1242,11 @@ export function useLioraState() {
         );
       }
 
-      // Hit num_predict / context budget — append a clear tip (not a hard error)
+      // Hit num_predict / context budget 鈥?append a clear tip (not a hard error)
       if (
         !ac.signal.aborted &&
         doneReason === "length" &&
-        !acc.includes("生成长度上限") &&
+        !acc.includes("鐢熸垚闀垮害涓婇檺") &&
         !acc.includes("generation limit")
       ) {
         acc = (acc || "").trimEnd() + truncNote;
@@ -1078,14 +1281,35 @@ export function useLioraState() {
             thinking: thinkAcc || undefined,
           },
         ];
-        void scheduleMemoryJob(sessionId, finalMessages, model);
+        // Queue memory for after generation flag clears (user reading/typing window)
+        pendingMemoryRef.current = {
+          sessionId,
+          messages: finalMessages,
+          model,
+          force: false,
+        };
       }
     } finally {
       if (abortRef.current === ac) abortRef.current = null;
+      generatingRef.current = false;
       setGenerating(false);
+      setEngineActivity((a) =>
+        a.kind === "load" ||
+        a.kind === "generate" ||
+        a.kind === "vision"
+          ? IDLE_ACTIVITY
+          : a,
+      );
+      // Now free to summarize while human reads / types next message
+      const p = pendingMemoryRef.current;
+      if (p && sNow.memoryEnabled) {
+        pendingMemoryRef.current = null;
+        void scheduleMemoryJob(p.sessionId, p.messages, p.model, p.force);
+      }
     }
   }, [
     active,
+    clearPendingImage,
     dict,
     generating,
     input,
@@ -1093,11 +1317,71 @@ export function useLioraState() {
     ollamaOnline,
     rememberText,
     scheduleMemoryJob,
+    visionModels,
   ]);
+
+  /**
+   * Optional: describe character portrait into text (fills description field).
+   * Deferred while chat is generating (same GPU policy as memory).
+   */
+  const describePortraitFromArt = useCallback(
+    async (dataUrl: string): Promise<string> => {
+      if (generatingRef.current) {
+        throw new Error("busy_generating");
+      }
+      if (!ollamaOnline || ollamaModels.length === 0) {
+        throw new Error("engine_offline");
+      }
+      const chatModel = resolveModelName(
+        active?.modelId || settingsRef.current.defaultModelId || "",
+        ollamaModels,
+      );
+      const visionModel = pickVisionModel({
+        available: ollamaModels,
+        visionCapable: visionModels,
+        preferred: null,
+        chatModel,
+      });
+      if (!visionModel) {
+        throw new Error("vision_no_model");
+      }
+      const locale = settingsRef.current.locale;
+      setEngineActivity(visionActivity(visionModel, locale));
+      try {
+        const compressed = await compressImageDataUrl(dataUrl);
+        const desc = await describeImage({
+          model: visionModel,
+          base64: compressed.base64,
+          locale,
+          mode: "character",
+          signal: AbortSignal.timeout(180_000),
+          numCtx: 4096,
+        });
+        if (visionModel !== chatModel) {
+          residentModelRef.current = null;
+        }
+        return desc;
+      } finally {
+        setEngineActivity((a) =>
+          a.kind === "vision" ? IDLE_ACTIVITY : a,
+        );
+      }
+    },
+    [active?.modelId, ollamaModels, ollamaOnline, visionModels],
+  );
 
   const editMemory = useCallback((id: string, object: string) => {
     setMemoryStore((s) => updateMemoryObject(s, id, object));
   }, []);
+
+  const assignMemory = useCallback(
+    (id: string, scope: "master" | "character" | "orphan", characterId?: string) => {
+      setMemoryStore((store) =>
+        updateMemoryOwnership(store, id, { scope, characterId }),
+      );
+    },
+    [],
+  );
 
   const deleteMemory = useCallback((id: string) => {
     setMemoryStore((s) => softDeleteMemory(s, id));
@@ -1122,6 +1406,7 @@ export function useLioraState() {
   const afterModelPulled = useCallback(
     async (modelId: string, switchTo = true) => {
       const short = modelId.replace(/:latest$/, "");
+      setEngineActivity((a) => (a.kind === "pull" ? IDLE_ACTIVITY : a));
       await engineApi.refresh();
       if (switchTo) {
         setSessionModel(short);
@@ -1133,6 +1418,7 @@ export function useLioraState() {
   return {
     ready,
     bootError,
+    persistenceError,
     dict,
     settings,
     sessions,
@@ -1141,6 +1427,11 @@ export function useLioraState() {
     setActiveId: selectSession,
     input,
     setInput,
+    pendingImage,
+    attachBusy,
+    attachImageFile,
+    clearPendingImage,
+    describePortraitFromArt,
     generating,
     lastError,
     ollamaOnline,
@@ -1171,6 +1462,8 @@ export function useLioraState() {
     setModelHubOpen,
     characterHubOpen,
     setCharacterHubOpen,
+    engineActivity,
+    reportPullProgress,
     afterModelPulled,
     tokenUsage,
     usageCtxLimit,
@@ -1196,14 +1489,12 @@ export function useLioraState() {
     toast,
     dismissToast: () => setToast(null),
     editMemory,
+    assignMemory,
     deleteMemory,
     clearMemories,
     runMemoryNow,
     rememberText,
     rememberBusy,
-    sensitivePending,
-    confirmSensitiveSave,
-    cancelSensitiveSave,
     reloadFromDisk: async () => {
       try {
         const [s, sess, mem, chars] = await Promise.all([

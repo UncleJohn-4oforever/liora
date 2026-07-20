@@ -350,6 +350,8 @@ export async function runMemoryPipeline(options: {
       system,
       prompt,
       numPredict: 700,
+      // Keep same ctx as chat so Ollama does not rebuild the KV cache
+      numCtx,
       signal,
     });
     payload = parseJsonLoose<ExtractPayload>(raw);
@@ -520,6 +522,7 @@ export async function runMemoryPipeline(options: {
       sessionId,
       model,
       characterId: ownerCharacterId,
+      numCtx,
       signal,
     });
     store = meso.store;

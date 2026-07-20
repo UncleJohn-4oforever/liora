@@ -10,7 +10,7 @@
 
 ---
 
-**Version: 0.7.0** — [CHANGELOG](./CHANGELOG.md) · [Versioning](./docs/VERSIONING.md) · [Long-chat QA](./docs/QA_LONG_CHAT.md) · [Character QA](./docs/QA_CHARACTER.md)
+**Version: 0.10.1** — [CHANGELOG](./CHANGELOG.md) · [Versioning](./docs/VERSIONING.md) · [Long-chat QA](./docs/QA_LONG_CHAT.md) · [Character QA](./docs/QA_CHARACTER.md) · [Vision](./docs/VISION.md)
 
 **Local-first desktop AI** for everyday users: chat with models on your PC, remember what matters, keep long conversations without stuffing the whole history into the context window, and switch **character cards** per session.
 
@@ -24,13 +24,15 @@
 
 > 中文：本地优先的桌面 AI。流式对话、分层记忆（主档 / 角色隔离）、滚动压缩、角色库与立绘、会话文件夹、模型中心。日常只开 Liora；数据在本机。
 
-### Windows release (0.7.0)
+### Windows release (0.10.1)
 
 After `npm run tauri build`:
 
-`src-tauri/target/release/bundle/nsis/Liora_0.7.0_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Liora_0.10.1_x64-setup.exe`
 
-Attach that file to a GitHub Release (`v0.7.0`). Do **not** commit `node_modules/`, `src-tauri/target/`, or user data.
+Attach that file to a GitHub Release (`v0.10.1`). Do **not** commit `node_modules/`, `src-tauri/target/`, or user data.
+
+**Vision → text:** attach/paste image → local describe → text only in history. Import GGUF auto-attaches same-folder `mmproj` when present ([docs/VISION.md](./docs/VISION.md)).
 
 ---
 
@@ -44,7 +46,7 @@ This project was designed and built in collaboration with **Grok 4.5** (xAI). If
 
 ---
 
-## What works today (0.5.x)
+## What works today
 
 ### Chat & engine
 - Streaming chat via local Ollama (`/api/chat`)
@@ -110,13 +112,13 @@ Open the Vite URL (default `http://127.0.0.1:1420`). Start Ollama, then pick a m
 
 ```bash
 npm install
-npm run version:sync -- 0.7.0   # when releasing
+npm run version:sync -- 0.10.1   # when releasing
 npm run tauri build
 ```
 
 Installer:
 
-`src-tauri/target/release/bundle/nsis/Liora_0.7.0_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Liora_0.10.1_x64-setup.exe`
 
 Requires Node.js, Rust, and VS C++ Build Tools. Or use `scripts/dev-desktop.ps1` for day-to-day dev.
 

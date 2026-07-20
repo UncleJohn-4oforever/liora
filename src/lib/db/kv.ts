@@ -38,7 +38,17 @@ export async function kvSetJson(
       }
       return;
     } catch (e) {
-      console.warn("desktop kv set failed, fallback idb", name, e);
+      // Keep a recovery copy, but do not pretend the user-selected desktop
+      // store was updated. Otherwise the next launch can silently load stale
+      // desktop data even though this call appeared to succeed.
+      try {
+        await idbSetJson(name, value);
+      } catch {
+        /* the original desktop error is the actionable one */
+      }
+      throw new Error(
+        `desktop storage write failed (${name}): ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
   await idbSetJson(name, value);

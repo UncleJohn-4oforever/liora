@@ -3,6 +3,7 @@ import type { MemoryItem, MemoryStoreData } from "../../types/memory";
 import { DEFAULT_CHARACTER } from "../../data/defaults";
 import { L3_IDENTITY_PREDICATES } from "./profileHeuristics";
 import {
+  characterMemoriesForMetaIndex,
   chunksForCharacter,
   isMetaCharacter,
   memoriesForInjection,
@@ -52,6 +53,7 @@ export function buildMemorySystemBlock(
   latestUserText: string,
   locale: "zh" | "en",
   character?: CharacterCard | null,
+  characterCatalog: CharacterCard[] = [],
 ): string {
   const lines: string[] = [];
   const card = character ?? DEFAULT_CHARACTER;
@@ -62,12 +64,12 @@ export function buildMemorySystemBlock(
     locale === "en"
       ? isMeta
         ? [
-            "Long-term master memory (user dossier). Prefer the user's latest message if conflict.",
-            "You are the local Meta AI steward of this dossier. Do not invent facts not listed.",
+            "You are Liora's local Meta AI and memory steward. You know that you are an AI and may coordinate multiple personas.",
+            "Use the master dossier, unclaimed memories, persona catalog, and relevant cross-persona summaries. Prefer the user's latest message if conflict; never invent memories.",
           ]
         : [
-            "Long-term memory for this character only (auditable). Prefer the latest message if conflict.",
-            "Use these facts when relevant. Do not invent memories not listed. Do not assume other characters' memories.",
+            "Shared user profile plus this character's private memory (auditable). Prefer the latest message if conflict.",
+            "Use these facts when relevant. Do not invent memories or assume another character's private experiences.",
           ]
       : isMeta
         ? [
@@ -80,11 +82,56 @@ export function buildMemorySystemBlock(
           ];
   lines.push(...header);
 
-  const mems = memoriesForInjection(activeMemories(store), {
+  const allActive = activeMemories(store);
+  const directlyVisible = memoriesForInjection(allActive, {
     isMeta,
     characterId,
   });
   const q = latestUserText.trim();
+  const metaIndex = isMeta ? characterMemoriesForMetaIndex(allActive) : [];
+  const queryTokens = tokenize(q);
+  const relatedAcrossCharacters = isMeta && q
+    ? rankMemories(
+        metaIndex.filter((m) => scoreMemoryAgainstQuery(m, queryTokens) > 0),
+        q,
+        6,
+      )
+    : [];
+  const visibleMap = new Map<string, MemoryItem>();
+  for (const memory of [...directlyVisible, ...relatedAcrossCharacters]) {
+    visibleMap.set(memory.id, memory);
+  }
+  const mems = [...visibleMap.values()];
+
+  if (isMeta) {
+    const names = new Map(
+      characterCatalog.map((c) => [c.id, c.name || c.nameEn || c.id]),
+    );
+    const groups = new Map<string, MemoryItem[]>();
+    for (const memory of metaIndex) {
+      const owner = memory.characterId || "unassigned";
+      groups.set(owner, [...(groups.get(owner) ?? []), memory]);
+    }
+    lines.push(locale === "en" ? "Persona memory catalog:" : "角色记忆目录：");
+    if (groups.size === 0) {
+      lines.push(locale === "en" ? "- No persona memories yet." : "- 暂无角色记忆。");
+    } else {
+      for (const [owner, owned] of groups) {
+        const recent = [...owned].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        lines.push(
+          `- ${names.get(owner) ?? owner}: ${owned.length} memories; latest topic ${recent.subject} / ${recent.predicate}`,
+        );
+      }
+    }
+    const orphanCount = allActive.filter((m) => m.scope === "orphan").length;
+    if (orphanCount > 0) {
+      lines.push(
+        locale === "en"
+          ? `- ${orphanCount} unclaimed memories require review or ownership assignment.`
+          : `- 有 ${orphanCount} 条无主记忆需要检查或认领。`,
+      );
+    }
+  }
 
   // L3: identity predicates first (name/pet), always inject within scope
   const l3All = mems.filter((m) => m.layer === "L3");
@@ -148,23 +195,33 @@ export function buildMemorySystemBlock(
           : "本角色相关画像：",
     );
     for (const m of l3) {
-      lines.push(`- ${m.subject} · ${m.predicate}: ${m.object}`);
+      const owner =
+        isMeta && m.scope === "character"
+          ? ` [${m.characterId ?? "unknown"}]`
+          : isMeta && m.scope === "orphan"
+            ? " [unclaimed]"
+            : "";
+      lines.push(`-${owner} ${m.subject} · ${m.predicate}: ${m.object}`);
     }
   }
   if (l4.length) {
     lines.push(locale === "en" ? "Answer style / procedures:" : "交互策略（须遵守）：");
     for (const m of l4) {
-      lines.push(`- ${m.object}`);
+      const owner = isMeta && m.scope === "character" ? ` [${m.characterId ?? "unknown"}]` :
+        isMeta && m.scope === "orphan" ? " [unclaimed]" : "";
+      lines.push(`-${owner} ${m.object}`);
     }
   }
   if (l5.length) {
     lines.push(locale === "en" ? "Events / open loops:" : "事件与进行中事项：");
     for (const m of l5) {
-      lines.push(`- ${m.object}`);
+      const owner = isMeta && m.scope === "character" ? ` [${m.characterId ?? "unknown"}]` :
+        isMeta && m.scope === "orphan" ? " [unclaimed]" : "";
+      lines.push(`-${owner} ${m.object}`);
     }
   }
 
-  // Episodes: this session + same character only (no other persona history)
+  // Personas stay isolated; Meta may retrieve relevant summaries across roles.
   const epsSession = store.episodes
     .filter((e) => e.sessionId === sessionId)
     .sort((a, b) => {
@@ -181,7 +238,7 @@ export function buildMemorySystemBlock(
     .filter(
       (e) =>
         e.sessionId !== sessionId &&
-        (e.characterId ?? "") === characterId,
+        (isMeta || (e.characterId ?? "") === characterId),
     )
     .map((e) => {
       const bag = `${e.topic} ${e.rawText} ${e.entities.join(" ")}`.toLowerCase();
@@ -220,7 +277,8 @@ export function buildMemorySystemBlock(
   if (epsOther.length) {
     lines.push(locale === "en" ? "Related past chats:" : "相关历史会话：");
     for (const e of epsOther) {
-      lines.push(`- ${e.topic}: ${e.rawText.slice(0, 180)}`);
+      const owner = isMeta && e.characterId ? ` [${e.characterId}]` : "";
+      lines.push(`-${owner} ${e.topic}: ${e.rawText.slice(0, 180)}`);
     }
   }
 
@@ -237,7 +295,8 @@ export function buildMemorySystemBlock(
   }
 
   const hasBody =
-    l3.length + l4.length + l5.length + epsCurrent.length + epsOther.length > 0;
+    l3.length + l4.length + l5.length + epsCurrent.length + epsOther.length > 0 ||
+    (isMeta && metaIndex.length > 0);
   if (!hasBody && !q) return "";
   if (lines.length <= header.length && !hasBody) return "";
 

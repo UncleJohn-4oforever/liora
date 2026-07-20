@@ -68,6 +68,11 @@ export interface CharacterCard {
    * Spec: 768×1024 preferred — docs/CHARACTER_VISUAL.md
    */
   avatarUrl?: string;
+  /**
+   * Optional root URL for a Liora Live2D character package. The static portrait
+   * remains the fallback until a compatible runtime adapter is registered.
+   */
+  live2dPackageUrl?: string;
   /** Builtin cards cannot be deleted */
   isBuiltin?: boolean;
   /**

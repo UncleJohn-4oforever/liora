@@ -13,6 +13,11 @@ export interface EngineSnapshot {
   /** Human message for banner */
   message: string;
   models: string[];
+  /**
+   * Models Ollama reports with `capabilities` including `vision`.
+   * Empty = none installed (or probe too old); do not send images[] to text-only models.
+   */
+  visionModels?: string[];
   /** Absolute path to ollama.exe if found */
   installPath: string | null;
   version: string | null;

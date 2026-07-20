@@ -86,6 +86,8 @@ export function assembleChatContext(options: {
   contextSize?: ContextSize;
   /** Session-bound character (persona + R3 memory scope). */
   character?: CharacterCard | null;
+  /** Meta receives a compact catalog, never every persona prompt. */
+  characterCatalog?: CharacterCard[];
 }): AssembleResult {
   const numCtx = normalizeContextSize(options.contextSize);
   const reservedGen = options.showThinking
@@ -114,6 +116,7 @@ export function assembleChatContext(options: {
       latest,
       options.locale,
       options.character,
+      options.characterCatalog,
     );
     // Memory + summaries: up to ~40% of available (profile + L2 chain)
     const s1Budget = Math.floor(available * 0.4);

@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,8 @@ struct OllamaDetect {
 struct OllamaProbe {
     online: bool,
     models: Vec<String>,
+    /// Model names whose Ollama capabilities include "vision" (multimodal).
+    vision_models: Vec<String>,
     version: Option<String>,
     /// tcp_open | http_ok | offline
     detail: String,
@@ -178,10 +180,8 @@ fn http_get(path: &str, timeout_ms: u64) -> Option<String> {
     // Body after header separator
     if let Some(idx) = raw.find("\r\n\r\n") {
         Some(raw[idx + 4..].to_string())
-    } else if let Some(idx) = raw.find("\n\n") {
-        Some(raw[idx + 2..].to_string())
     } else {
-        None
+        raw.find("\n\n").map(|idx| raw[idx + 2..].to_string())
     }
 }
 
@@ -190,6 +190,7 @@ fn probe_api_inner() -> OllamaProbe {
         return OllamaProbe {
             online: false,
             models: vec![],
+            vision_models: vec![],
             version: None,
             detail: "offline".into(),
         };
@@ -201,6 +202,7 @@ fn probe_api_inner() -> OllamaProbe {
             return OllamaProbe {
                 online: false,
                 models: vec![],
+                vision_models: vec![],
                 version: None,
                 detail: "tcp_open_http_fail".into(),
             };
@@ -208,11 +210,26 @@ fn probe_api_inner() -> OllamaProbe {
     };
 
     let mut models = Vec::new();
+    let mut vision_models = Vec::new();
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
         if let Some(arr) = v.get("models").and_then(|m| m.as_array()) {
             for m in arr {
                 if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
                     models.push(name.to_string());
+                    let has_vision = m
+                        .get("capabilities")
+                        .and_then(|c| c.as_array())
+                        .map(|caps| {
+                            caps.iter().any(|x| {
+                                x.as_str()
+                                    .map(|s| s.eq_ignore_ascii_case("vision"))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+                    if has_vision {
+                        vision_models.push(name.to_string());
+                    }
                 }
             }
         }
@@ -227,6 +244,7 @@ fn probe_api_inner() -> OllamaProbe {
     OllamaProbe {
         online: true,
         models,
+        vision_models,
         version,
         detail: "http_ok".into(),
     }
@@ -307,7 +325,7 @@ fn resolve_ollama_exe() -> Option<PathBuf> {
 
 // Intentionally no launch of "ollama app.exe" / tray GUI — product uses headless serve only.
 
-fn read_version(exe: &PathBuf) -> Option<String> {
+fn read_version(exe: &Path) -> Option<String> {
     let mut cmd = Command::new(exe);
     cmd.arg("--version");
     apply_no_window(&mut cmd);
@@ -363,7 +381,7 @@ fn probe_ollama_api() -> OllamaProbe {
 }
 
 /// Spawn detached; on Windows use CREATE_NO_WINDOW so no flash console.
-fn spawn_detached(exe: &PathBuf, args: &[&str]) -> Result<(), String> {
+fn spawn_detached(exe: &Path, args: &[&str]) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -505,9 +523,7 @@ fn ollama_http_once(
 ) -> Result<OllamaHttpResponse, String> {
     let addr = format!("{OLLAMA_HOST}:{OLLAMA_PORT}");
     let mut stream = TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .map_err(|e| format!("bad_addr: {e}"))?,
+        &addr.parse().map_err(|e| format!("bad_addr: {e}"))?,
         Duration::from_secs(10),
     )
     .map_err(|e| format!("connect_failed: {e}"))?;
@@ -575,10 +591,8 @@ fn parse_http_status(raw: &str) -> Option<u16> {
 fn split_http_body(raw: &str) -> Option<String> {
     if let Some(idx) = raw.find("\r\n\r\n") {
         Some(raw[idx + 4..].to_string())
-    } else if let Some(idx) = raw.find("\n\n") {
-        Some(raw[idx + 2..].to_string())
     } else {
-        None
+        raw.find("\n\n").map(|idx| raw[idx + 2..].to_string())
     }
 }
 
@@ -628,19 +642,12 @@ fn ollama_chat_stream_inner(
 
     let addr = format!("{OLLAMA_HOST}:{OLLAMA_PORT}");
     let mut stream = match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .map_err(|e| format!("bad_addr: {e}"))?,
+        &addr.parse().map_err(|e| format!("bad_addr: {e}"))?,
         Duration::from_secs(10),
     ) {
         Ok(s) => s,
         Err(e) => {
-            finish(
-                app,
-                request_id,
-                Some(format!("connect_failed: {e}")),
-                None,
-            );
+            finish(app, request_id, Some(format!("connect_failed: {e}")), None);
             return Ok(());
         }
     };
@@ -854,9 +861,7 @@ fn ollama_pull_stream_inner(
 
     let addr = format!("{OLLAMA_HOST}:{OLLAMA_PORT}");
     let mut stream = match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .map_err(|e| format!("bad_addr: {e}"))?,
+        &addr.parse().map_err(|e| format!("bad_addr: {e}"))?,
         Duration::from_secs(15),
     ) {
         Ok(s) => s,
@@ -1022,10 +1027,101 @@ struct ImportGgufResult {
     ok: bool,
     name: String,
     path: String,
+    /// Absolute path of auto-detected mmproj (vision projector), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mmproj_path: Option<String>,
+    /// True when import staged main GGUF + mmproj for Ollama vision.
+    vision_attached: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     log: Option<String>,
+}
+
+fn import_fail(
+    name: String,
+    path: String,
+    mmproj_path: Option<String>,
+    error: String,
+    log: Option<String>,
+) -> ImportGgufResult {
+    ImportGgufResult {
+        ok: false,
+        name,
+        path,
+        mmproj_path,
+        vision_attached: false,
+        error: Some(error),
+        log,
+    }
+}
+
+/// True if filename looks like a multimodal projector (not the language GGUF).
+fn is_mmproj_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".gguf")
+        && (lower.contains("mmproj")
+            || lower.contains("mm_proj")
+            || lower.contains("projector")
+            || lower.starts_with("mmproj-")
+            || lower.contains("-mmproj-")
+            || lower.contains("_mmproj_"))
+}
+
+/// Scan the same directory as `main_gguf` for a vision projector GGUF.
+fn find_sibling_mmproj(main_gguf: &Path) -> Option<PathBuf> {
+    let parent = main_gguf.parent()?;
+    let main_name = main_gguf.file_name()?.to_string_lossy().to_string();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let rd = std::fs::read_dir(parent).ok()?;
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if !p.is_file() {
+            continue;
+        }
+        let fname = ent.file_name().to_string_lossy().to_string();
+        if fname.eq_ignore_ascii_case(&main_name) {
+            continue;
+        }
+        if is_mmproj_filename(&fname) {
+            candidates.push(p);
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    // Prefer name containing mmproj; then largest (f16 projectors are bigger)
+    candidates.sort_by(|a, b| {
+        let sa = a.metadata().map(|m| m.len()).unwrap_or(0);
+        let sb = b.metadata().map(|m| m.len()).unwrap_or(0);
+        sb.cmp(&sa)
+    });
+    candidates.into_iter().next()
+}
+
+fn path_for_modelfile(p: &Path) -> String {
+    let abs = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let mut s = abs.to_string_lossy().to_string();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        s = stripped.to_string();
+    }
+    s.replace('\\', "/")
+}
+
+/// Link or copy `src` into `dest` (prefer hard link to avoid duplicating multi‑GB files).
+fn link_or_copy(src: &Path, dest: &Path) -> Result<(), String> {
+    if dest.exists() {
+        let _ = std::fs::remove_file(dest);
+    }
+    match std::fs::hard_link(src, dest) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Cross-volume or FS without hardlinks — fall back to copy
+            std::fs::copy(src, dest)
+                .map(|_| ())
+                .map_err(|e| format!("stage_copy_failed: {e}"))
+        }
+    }
 }
 
 /// Native file picker for a single .gguf file. Returns absolute path or null if cancelled.
@@ -1033,7 +1129,7 @@ struct ImportGgufResult {
 fn pick_gguf_file() -> Option<String> {
     rfd::FileDialog::new()
         .add_filter("GGUF model", &["gguf"])
-        .set_title("Select GGUF model file")
+        .set_title("Select language GGUF (mmproj in same folder is auto-detected)")
         .pick_file()
         .map(|p| p.to_string_lossy().to_string())
 }
@@ -1079,13 +1175,13 @@ fn ollama_import_gguf_inner(
     let path = path.trim().trim_matches('"').to_string();
     let path_buf = PathBuf::from(&path);
     if !path_buf.is_file() {
-        return Ok(ImportGgufResult {
-            ok: false,
-            name: name.clone(),
-            path: path.clone(),
-            error: Some("file_not_found".into()),
-            log: None,
-        });
+        return Ok(import_fail(
+            name.clone(),
+            path.clone(),
+            None,
+            "file_not_found".into(),
+            None,
+        ));
     }
     let ext = path_buf
         .extension()
@@ -1093,52 +1189,109 @@ fn ollama_import_gguf_inner(
         .unwrap_or("")
         .to_ascii_lowercase();
     if ext != "gguf" {
-        return Ok(ImportGgufResult {
-            ok: false,
-            name: name.clone(),
-            path: path.clone(),
-            error: Some("not_gguf".into()),
-            log: None,
-        });
+        return Ok(import_fail(
+            name.clone(),
+            path.clone(),
+            None,
+            "not_gguf".into(),
+            None,
+        ));
+    }
+
+    // User may have picked the projector by mistake
+    if let Some(fname) = path_buf.file_name().and_then(|n| n.to_str()) {
+        if is_mmproj_filename(fname) {
+            return Ok(import_fail(
+                name.clone(),
+                path.clone(),
+                Some(path.clone()),
+                "picked_mmproj".into(),
+                Some(
+                    "Selected file looks like a vision projector (mmproj). Pick the main language .gguf; Liora will auto-attach mmproj from the same folder.".into(),
+                ),
+            ));
+        }
     }
 
     let name = match sanitize_model_name(&name) {
         Ok(n) => n,
         Err(e) => {
-            return Ok(ImportGgufResult {
-                ok: false,
-                name: name.clone(),
-                path: path.clone(),
-                error: Some(e),
-                log: None,
-            });
+            return Ok(import_fail(name.clone(), path.clone(), None, e, None));
         }
     };
 
     let exe = match resolve_ollama_exe() {
         Some(p) => p,
         None => {
-            return Ok(ImportGgufResult {
-                ok: false,
+            return Ok(import_fail(
                 name,
                 path,
-                error: Some("ollama_not_found".into()),
-                log: None,
-            });
+                None,
+                "ollama_not_found".into(),
+                None,
+            ));
         }
     };
 
-    // Modelfile FROM: use absolute path; quote if spaces
-    let abs = path_buf
-        .canonicalize()
-        .unwrap_or(path_buf.clone());
-    let mut from_path = abs.to_string_lossy().to_string();
-    // Windows \\?\ prefix can confuse some tools — strip if present
-    if let Some(stripped) = from_path.strip_prefix(r"\\?\") {
-        from_path = stripped.to_string();
+    let mmproj_buf = find_sibling_mmproj(&path_buf);
+    let mmproj_path_str = mmproj_buf.as_ref().map(|p| p.to_string_lossy().to_string());
+
+    // Staging + Modelfile:
+    // - With mmproj: Ollama needs both files in one directory and FROM that directory
+    //   (community-confirmed for vision GGUF + projector). We stage via hardlink/copy
+    //   so messy source folders (blobs/manifests) do not confuse create.
+    // - Without mmproj: classic FROM absolute main GGUF path.
+    let stage_id = format!(
+        "liora_import_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let stage_dir = std::env::temp_dir().join(&stage_id);
+    if let Err(e) = std::fs::create_dir_all(&stage_dir) {
+        return Ok(import_fail(
+            name,
+            path,
+            mmproj_path_str,
+            format!("temp_dir: {e}"),
+            None,
+        ));
     }
-    // Prefer forward slashes in Modelfile (works on Windows Ollama)
-    let from_path = from_path.replace('\\', "/");
+
+    let vision_attached = mmproj_buf.is_some();
+    let from_target: PathBuf;
+    let mut stage_note = String::new();
+
+    if let Some(ref mmproj) = mmproj_buf {
+        let main_name = path_buf
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "model.gguf".into());
+        let mm_name = mmproj
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "mmproj.gguf".into());
+        // Sanitize stage filenames (spaces ok; keep simple)
+        let main_dest = stage_dir.join(&main_name);
+        let mm_dest = stage_dir.join(&mm_name);
+        if let Err(e) = link_or_copy(&path_buf, &main_dest) {
+            let _ = std::fs::remove_dir_all(&stage_dir);
+            return Ok(import_fail(name, path, mmproj_path_str, e, None));
+        }
+        if let Err(e) = link_or_copy(mmproj, &mm_dest) {
+            let _ = std::fs::remove_dir_all(&stage_dir);
+            return Ok(import_fail(name, path, mmproj_path_str, e, None));
+        }
+        from_target = stage_dir.clone();
+        stage_note =
+            format!("vision: staged main + mmproj ({mm_name}) for Ollama multimodal create\n");
+    } else {
+        from_target = path_buf.canonicalize().unwrap_or_else(|_| path_buf.clone());
+    }
+
+    let from_path = path_for_modelfile(&from_target);
     let from_line = if from_path.contains(' ') {
         format!("FROM \"{from_path}\"")
     } else {
@@ -1146,7 +1299,7 @@ fn ollama_import_gguf_inner(
     };
 
     let mut modelfile = format!("{from_line}\n");
-    if let Some(sys) = system {
+    if let Some(ref sys) = system {
         let sys = sys.trim();
         if !sys.is_empty() {
             // triple-quote style; escape triple quotes in content
@@ -1155,25 +1308,16 @@ fn ollama_import_gguf_inner(
         }
     }
 
-    let tmp_dir = std::env::temp_dir().join(format!("liora_import_{}", std::process::id()));
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        return Ok(ImportGgufResult {
-            ok: false,
-            name,
-            path,
-            error: Some(format!("temp_dir: {e}")),
-            log: None,
-        });
-    }
-    let mf_path = tmp_dir.join("Modelfile");
+    let mf_path = stage_dir.join("Modelfile");
     if let Err(e) = std::fs::write(&mf_path, modelfile.as_bytes()) {
-        return Ok(ImportGgufResult {
-            ok: false,
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Ok(import_fail(
             name,
             path,
-            error: Some(format!("write_modelfile: {e}")),
-            log: None,
-        });
+            mmproj_path_str,
+            format!("write_modelfile: {e}"),
+            None,
+        ));
     }
 
     let mut cmd = Command::new(&exe);
@@ -1194,17 +1338,123 @@ fn ollama_import_gguf_inner(
     let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
-            return Ok(ImportGgufResult {
-                ok: false,
+            let _ = std::fs::remove_dir_all(&stage_dir);
+            return Ok(import_fail(
                 name,
                 path,
-                error: Some(format!("spawn_failed: {e}")),
-                log: None,
-            });
+                mmproj_path_str,
+                format!("spawn_failed: {e}"),
+                None,
+            ));
         }
     };
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = format!("{stage_note}{stdout}{stderr}").trim().to_string();
+    // Drop staged hardlinks/copies (Ollama has ingested layers on success)
+    let _ = std::fs::remove_dir_all(&stage_dir);
+
+    if output.status.success() {
+        Ok(ImportGgufResult {
+            ok: true,
+            name,
+            path,
+            mmproj_path: mmproj_path_str,
+            vision_attached,
+            error: None,
+            log: if log.is_empty() { None } else { Some(log) },
+        })
+    } else {
+        // If directory FROM failed with mmproj, retry once as plain main GGUF
+        // so text import still works on older Ollama without vision packaging.
+        if vision_attached {
+            let retry = ollama_import_gguf_text_only(&exe, &path_buf, &name, system.as_deref());
+            if let Ok(mut r) = retry {
+                if r.ok {
+                    r.mmproj_path = mmproj_path_str.clone();
+                    r.vision_attached = false;
+                    let note = format!(
+                        "mmproj was found but multimodal create failed; imported text-only. Detail:\n{log}\n"
+                    );
+                    r.log = Some(match r.log.take() {
+                        Some(prev) => format!("{note}{prev}"),
+                        None => note,
+                    });
+                    r.error = None;
+                    // Surface soft warning via log only; ok=true text import
+                    return Ok(r);
+                }
+            }
+        }
+        let err = if log.is_empty() {
+            format!("create_failed: exit {:?}", output.status.code())
+        } else {
+            // keep tail of log
+            let snippet: String = log
+                .chars()
+                .rev()
+                .take(400)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            snippet
+        };
+        Ok(import_fail(name, path, mmproj_path_str, err, Some(log)))
+    }
+}
+
+/// Text-only fallback: FROM single main GGUF (no mmproj staging).
+fn ollama_import_gguf_text_only(
+    exe: &PathBuf,
+    main_gguf: &Path,
+    name: &str,
+    system: Option<&str>,
+) -> Result<ImportGgufResult, String> {
+    let path = main_gguf.to_string_lossy().to_string();
+    let from_path = path_for_modelfile(main_gguf);
+    let from_line = if from_path.contains(' ') {
+        format!("FROM \"{from_path}\"")
+    } else {
+        format!("FROM {from_path}")
+    };
+    let mut modelfile = format!("{from_line}\n");
+    if let Some(sys) = system {
+        let sys = sys.trim();
+        if !sys.is_empty() {
+            let safe = sys.replace("\"\"\"", "'''");
+            modelfile.push_str(&format!("SYSTEM \"\"\"\n{safe}\n\"\"\"\n"));
+        }
+    }
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "liora_import_txt_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("temp_dir: {e}"))?;
+    let mf_path = tmp_dir.join("Modelfile");
+    std::fs::write(&mf_path, modelfile.as_bytes()).map_err(|e| format!("write_modelfile: {e}"))?;
+
+    let mut cmd = Command::new(exe);
+    cmd.arg("create")
+        .arg(name)
+        .arg("-f")
+        .arg(&mf_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd.output().map_err(|e| format!("spawn_failed: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let log = format!("{stdout}{stderr}").trim().to_string();
@@ -1213,26 +1463,31 @@ fn ollama_import_gguf_inner(
     if output.status.success() {
         Ok(ImportGgufResult {
             ok: true,
-            name,
+            name: name.to_string(),
             path,
+            mmproj_path: None,
+            vision_attached: false,
             error: None,
             log: if log.is_empty() { None } else { Some(log) },
         })
     } else {
-        let err = if log.is_empty() {
-            format!("create_failed: exit {:?}", output.status.code())
-        } else {
-            // keep tail of log
-            let snippet: String = log.chars().rev().take(400).collect::<String>().chars().rev().collect();
-            snippet
-        };
-        Ok(ImportGgufResult {
-            ok: false,
-            name,
+        Ok(import_fail(
+            name.to_string(),
             path,
-            error: Some(err),
-            log: Some(log),
-        })
+            None,
+            if log.is_empty() {
+                format!("create_failed: exit {:?}", output.status.code())
+            } else {
+                log.chars()
+                    .rev()
+                    .take(400)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect()
+            },
+            Some(log),
+        ))
     }
 }
 
