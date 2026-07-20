@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-07-20
+
+### Changed
+
+- New installations and last-resort recovery mode now default to English; existing users keep their saved language choice
+
 ## [0.10.1] — 2026-07-18
 
 ### Fixed

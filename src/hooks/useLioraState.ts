@@ -93,7 +93,7 @@ import type {
 } from "../types";
 
 const defaultSettings: AppSettings = {
-  locale: "zh",
+  locale: "en",
   defaultModelId: DEFAULT_MODEL.id,
   defaultCharacterId: DEFAULT_CHARACTER.id,
   memoryEnabled: true,
@@ -283,7 +283,7 @@ export function useLioraState() {
               ),
             );
           } catch {
-            const s = createSession("zh");
+            const s = createSession("en");
             setSessions([s]);
             setActiveId(s.id);
             setCharacters(ensureBuiltin([]));

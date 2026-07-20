@@ -1,6 +1,6 @@
 [package]
 name = "liora"
-version = "0.10.1"
+version = "0.10.2"
 description = "Liora — local private AI desktop"
 authors = ["Liora"]
 edition = "2021"
